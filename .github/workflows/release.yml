@@ -72,9 +72,7 @@ jobs:
         with:
           name: neko-${{ matrix.name }}
           if-no-files-found: error
-          path: |
-            neko-${{ github.ref_name }}-${{ matrix.name }}.tar.gz
-            neko-${{ github.ref_name }}-${{ matrix.name }}.zip
+          path: neko-${{ github.ref_name }}-${{ matrix.name }}.* # 关键修复点
 
   release:
     name: publish
@@ -86,9 +84,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
+          merge-multiple: true # 关键修复点：平铺下载
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/**/*
+          files: dist/*
           generate_release_notes: true
