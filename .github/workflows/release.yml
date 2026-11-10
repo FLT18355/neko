@@ -23,15 +23,17 @@ jobs:
           - name: linux-aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+          # ⬇️ 将 macos-14 改为 macos-15
           - name: macos-aarch64
-            os: macos-14
+            os: macos-15
             target: aarch64-apple-darwin
           - name: windows-x86_64
             os: windows-2022
             target: x86_64-pc-windows-msvc
 
     steps:
-      - uses: actions/checkout@v4
+      # ⬇️ 升级 checkout 版本以消除 Node.js 20 警告
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -72,7 +74,7 @@ jobs:
         with:
           name: neko-${{ matrix.name }}
           if-no-files-found: error
-          path: neko-${{ github.ref_name }}-${{ matrix.name }}.* # 关键修复点
+          path: neko-${{ github.ref_name }}-${{ matrix.name }}.*
 
   release:
     name: publish
@@ -84,7 +86,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
-          merge-multiple: true # 关键修复点：平铺下载
+          merge-multiple: true
 
       - name: Create release
         uses: softprops/action-gh-release@v2
