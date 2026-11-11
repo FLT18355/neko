@@ -78,6 +78,16 @@ impl Lrc {
     }
 }
 
+pub fn window(index: usize, total: usize, rows: usize) -> (usize, usize) {
+    if total == 0 || rows == 0 {
+        return (0, 0);
+    }
+    let start = index
+        .saturating_sub(rows / 2)
+        .min(total.saturating_sub(rows));
+    (start, (start + rows).min(total))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +108,15 @@ mod tests {
         assert_eq!(lrc.index_at(7.5), Some(1));
         assert_eq!(lrc.index_at(99.0), Some(2));
         assert_eq!(lrc.index_at(-1.0), None);
+    }
+
+    #[test]
+    fn keeps_current_line_inside_window() {
+        assert_eq!(window(0, 10, 5), (0, 5));
+        assert_eq!(window(5, 10, 5), (3, 8));
+        assert_eq!(window(9, 10, 5), (5, 10));
+        assert_eq!(window(2, 3, 5), (0, 3));
+        assert_eq!(window(2, 0, 5), (0, 0));
+        assert_eq!(window(2, 5, 0), (0, 0));
     }
 }

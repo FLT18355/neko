@@ -93,6 +93,31 @@ pub fn duration_text(seconds: f64) -> String {
     }
 }
 
+pub fn human_duration(seconds: f64) -> String {
+    let total = seconds.max(0.0) as u64;
+    if total >= 3600 {
+        format!("{} 小时 {} 分", total / 3600, total % 3600 / 60)
+    } else if total >= 60 {
+        format!("{} 分 {} 秒", total / 60, total % 60)
+    } else {
+        format!("{total} 秒")
+    }
+}
+
+pub fn folders(tracks: &[Track], root: &Path) -> Vec<(String, usize)> {
+    let mut map: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for track in tracks {
+        let folder = track
+            .path
+            .parent()
+            .and_then(|parent| parent.strip_prefix(root).ok())
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default();
+        *map.entry(folder).or_insert(0) += 1;
+    }
+    map.into_iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +169,33 @@ mod tests {
         assert_eq!(duration_text(83.2), "01:23");
         assert_eq!(duration_text(3723.0), "1:02:03");
         assert_eq!(duration_text(f64::NAN), "--:--");
+        assert_eq!(human_duration(45.0), "45 秒");
+        assert_eq!(human_duration(125.0), "2 分 5 秒");
+        assert_eq!(human_duration(7325.0), "2 小时 2 分");
+    }
+
+    #[test]
+    fn groups_tracks_by_relative_folder() {
+        let root = Path::new("/music");
+        let track = |path: &str| Track {
+            path: PathBuf::from(path),
+            title: String::new(),
+            modified: 0,
+        };
+        let tracks = [
+            track("/music/a.mp3"),
+            track("/music/rock/b.mp3"),
+            track("/music/rock/c.mp3"),
+            track("/music/jazz/d.mp3"),
+        ];
+        let folders = folders(&tracks, root);
+        assert_eq!(
+            folders,
+            vec![
+                ("".to_string(), 1),
+                ("jazz".to_string(), 1),
+                ("rock".to_string(), 2)
+            ]
+        );
     }
 }

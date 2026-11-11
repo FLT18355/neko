@@ -2,15 +2,20 @@ mod actions;
 
 use crate::cache::Cache;
 use crate::config::{self, Config};
+use crate::keymap::{self, Action};
 use crate::library::{self, Track};
 use crate::lyrics::Lrc;
 use crate::mpv::Mpv;
+use crate::theme;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
 pub(crate) const MODES: [&str; 4] = ["order", "loop", "single", "shuffle"];
+pub(crate) const EQ_BANDS: [f64; 10] = [
+    31.0, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
+];
 pub(crate) const EFFECTS: [(&str, &str); 4] = [
     ("原声", ""),
     (
@@ -33,6 +38,14 @@ pub(crate) enum Modal {
     Directory,
     Seek,
     Settings,
+    Folders,
+    Playlists,
+    PlaylistTracks,
+    PlaylistName,
+    Equalizer,
+    AudioDevice,
+    Stats,
+    Keybindings,
 }
 
 pub struct App {
@@ -49,6 +62,7 @@ pub struct App {
     pub(crate) lrc: Option<Lrc>,
     pub(crate) lrc_path: Option<PathBuf>,
     pub(crate) lrc_offset: f64,
+    pub(crate) lyrics_full: bool,
     pub(crate) a_point: Option<f64>,
     pub(crate) b_point: Option<f64>,
     pub(crate) sleep_at: Option<Instant>,
@@ -66,10 +80,79 @@ pub struct App {
     pub(crate) quit: bool,
     pub(crate) last_path: Option<PathBuf>,
     pub(crate) last_skip: Option<Instant>,
+    pub(crate) last_position: f64,
+    pub(crate) last_duration: Option<f64>,
+    pub(crate) stat_at: Instant,
+    pub(crate) folder: String,
+    pub(crate) folder_selected: usize,
+    pub(crate) playlists: Vec<crate::config::Playlist>,
+    pub(crate) playlist_selected: usize,
+    pub(crate) playlist_song_selected: usize,
+    pub(crate) queue_selected: usize,
+    pub(crate) playlist_name_target: Option<usize>,
+    pub(crate) eq_selected: usize,
+    pub(crate) device_selected: usize,
+    pub(crate) devices: Vec<(String, String)>,
+    pub(crate) stats_scroll: usize,
+    pub(crate) keybind_selected: usize,
+    pub(crate) capture_key: bool,
+    pub(crate) bindings: HashMap<String, Action>,
 }
 
 fn fade_volume(base: f64, remaining: f64) -> f64 {
     (base * (remaining / 10.0).clamp(0.0, 1.0)).max(0.0)
+}
+
+pub(crate) fn eq_graph(gains: &[f64]) -> String {
+    let mut parts = Vec::new();
+    for (band, gain) in EQ_BANDS.iter().zip(gains.iter()) {
+        let gain = gain.clamp(-12.0, 12.0);
+        if gain.abs() >= 0.05 {
+            parts.push(format!(
+                "equalizer=f={band}:width_type=o:width=1:g={gain:.1}"
+            ));
+        }
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("lavfi=[{}]", parts.join(","))
+    }
+}
+
+fn resume_target(position: f64, duration: Option<f64>) -> Option<f64> {
+    if !position.is_finite() || position < 3.0 {
+        return None;
+    }
+    if let Some(duration) = duration
+        && duration > 0.0
+        && position > duration - 3.0
+    {
+        return None;
+    }
+    Some(position)
+}
+
+pub(crate) fn cycle_rating(current: u8) -> u8 {
+    if current >= 5 { 0 } else { current + 1 }
+}
+
+fn build_bindings(overrides: &HashMap<String, String>) -> HashMap<String, Action> {
+    let mut map = HashMap::new();
+    for action in keymap::ACTIONS {
+        match overrides.get(action.id()) {
+            Some(key) if !key.is_empty() => {
+                map.insert(key.clone(), action);
+            }
+            Some(_) => {}
+            None => {
+                for key in keymap::default_keys(action) {
+                    map.insert(key.to_string(), action);
+                }
+            }
+        }
+    }
+    map
 }
 
 impl App {
@@ -92,14 +175,20 @@ impl App {
         let sort = cfg.sort.clone();
         let remaining = cfg.time_remaining;
         let transparent = cfg.transparent;
-        let cached_view = if ["all", "fav", "recent"].contains(&cache.view.as_str()) {
+        cfg.theme = theme::set(&cfg.theme).to_string();
+        cfg.eq_gains.truncate(EQ_BANDS.len());
+        cfg.eq_gains.resize(EQ_BANDS.len(), 0.0);
+        let cached_view = if ["all", "fav", "recent", "folder"].contains(&cache.view.as_str()) {
             cache.view.clone()
         } else {
             "all".into()
         };
         let cached_filter = cache.filter.clone();
+        let cached_folder = cache.folder.clone();
         let cached_selected = cache.selected_path.clone();
         let cached_last = cache.last_path.clone();
+        let bindings = build_bindings(&cfg.keys);
+        let playlists = cfg.playlists.clone();
         let _ = mpv.apply_mode(&mode);
         // 每次启动都从 1.0x 开始，避免上次调速残留。
         cfg.speed = 1.0;
@@ -109,7 +198,15 @@ impl App {
             .find(|(name, _)| *name == cfg.effect)
             .copied()
             .unwrap_or(EFFECTS[0]);
-        let _ = mpv.set_af(effect.1);
+        let graph = if cfg.eq_on {
+            eq_graph(&cfg.eq_gains)
+        } else {
+            effect.1.to_string()
+        };
+        let _ = mpv.set_af(&graph);
+        if !cfg.audio_device.is_empty() {
+            let _ = mpv.set_prop("audio-device", json!(cfg.audio_device));
+        }
 
         let mut app = Self {
             mpv,
@@ -125,6 +222,7 @@ impl App {
             lrc: None,
             lrc_path: None,
             lrc_offset: 0.0,
+            lyrics_full: false,
             a_point: None,
             b_point: None,
             sleep_at: None,
@@ -142,6 +240,23 @@ impl App {
             quit: false,
             last_path: None,
             last_skip: None,
+            last_position: 0.0,
+            last_duration: None,
+            stat_at: Instant::now(),
+            folder: cached_folder,
+            folder_selected: 0,
+            playlists,
+            playlist_selected: 0,
+            playlist_song_selected: 0,
+            queue_selected: 0,
+            playlist_name_target: None,
+            eq_selected: 0,
+            device_selected: 0,
+            devices: Vec::new(),
+            stats_scroll: 0,
+            keybind_selected: 0,
+            capture_key: false,
+            bindings,
         };
         app.selected = 0;
         app.rebuild_visible();
@@ -170,16 +285,41 @@ impl App {
 
     pub fn tick(&mut self) {
         self.mpv.refresh();
+        let now = Instant::now();
+        let delta = now.duration_since(self.stat_at).as_secs_f64().min(1.0);
+        self.stat_at = now;
+        if let Some(path) = self.mpv.state.path.clone()
+            && !self.mpv.state.pause
+            && !self.mpv.state.idle
+        {
+            let key = path.to_string_lossy().to_string();
+            self.cache.total_seconds += delta;
+            *self.cache.listen_seconds.entry(key).or_insert(0.0) += delta;
+        }
         match self.mpv.state.path.clone() {
             Some(path) => {
                 if self.last_path.as_ref() != Some(&path) {
+                    if let Some(old) = self.last_path.take() {
+                        let finished = self
+                            .last_duration
+                            .is_some_and(|duration| self.last_position > duration - 3.0);
+                        if self.last_position >= 1.0 && !finished {
+                            self.cache
+                                .positions
+                                .insert(old.to_string_lossy().to_string(), self.last_position);
+                        }
+                    }
+                    let key = path.to_string_lossy().to_string();
                     self.last_path = Some(path.clone());
+                    self.last_position = self.mpv.state.time_pos.unwrap_or(0.0);
+                    self.last_duration = self.mpv.state.duration;
                     self.cache.add_recent(&path);
-                    *self
-                        .cache
-                        .plays
-                        .entry(path.to_string_lossy().to_string())
-                        .or_insert(0) += 1;
+                    *self.cache.plays.entry(key.clone()).or_insert(0) += 1;
+                    let resume = self
+                        .cfg
+                        .resume
+                        .then(|| self.cache.positions.get(&key).copied())
+                        .flatten();
                     let _ = self.cache.save();
                     self.lrc = Lrc::load_for(&path);
                     self.lrc_path = Some(path.clone());
@@ -194,10 +334,41 @@ impl App {
                                 .map(|stem| stem.to_string_lossy().to_string())
                         })
                         .unwrap_or_else(|| "下一首".into());
-                    self.notify(format!("正在播放 · {title}"));
+                    if let Some(position) =
+                        resume.and_then(|value| resume_target(value, self.mpv.state.duration))
+                    {
+                        let _ = self.mpv.seek(position, true);
+                        self.last_position = position;
+                        self.notify(format!(
+                            "继续播放 · {title} · {}",
+                            library::duration_text(position)
+                        ));
+                    } else {
+                        self.notify(format!("正在播放 · {title}"));
+                    }
+                } else {
+                    if let Some(position) = self.mpv.state.time_pos {
+                        self.last_position = position;
+                    }
+                    if self.mpv.state.duration.is_some() {
+                        self.last_duration = self.mpv.state.duration;
+                    }
                 }
             }
-            None => self.last_path = None,
+            None => {
+                if let Some(old) = self.last_path.take() {
+                    let finished = self
+                        .last_duration
+                        .is_some_and(|duration| self.last_position > duration - 3.0);
+                    if self.last_position >= 1.0 && !finished {
+                        self.cache
+                            .positions
+                            .insert(old.to_string_lossy().to_string(), self.last_position);
+                    }
+                }
+                self.last_position = 0.0;
+                self.last_duration = None;
+            }
         }
         if let Some(deadline) = self.sleep_at {
             let remaining = deadline
@@ -235,15 +406,20 @@ impl App {
 
     pub fn save(&mut self) {
         if let Some(path) = self.mpv.state.path.clone() {
+            let position = self.mpv.state.time_pos.unwrap_or(self.last_position);
             self.cache
-                .update_last(&path, self.mpv.state.time_pos.unwrap_or(0.0));
+                .positions
+                .insert(path.to_string_lossy().to_string(), position);
+            self.cache.update_last(&path, position);
         }
         let selected_path = self
             .selected_track()
             .map(|track| track.path.to_string_lossy().to_string());
         self.cache.view = self.view.clone();
         self.cache.filter = self.filter.clone();
+        self.cache.folder = self.folder.clone();
         self.cache.selected_path = selected_path;
+        self.cfg.playlists = self.playlists.clone();
         if let Err(err) = self.cfg.save() {
             eprintln!("保存配置失败：{err}");
         }
@@ -269,6 +445,16 @@ impl App {
                     .recent
                     .iter()
                     .any(|path| path == &track.path.to_string_lossy()),
+                "folder" => {
+                    let root = std::path::Path::new(&self.cfg.music_dir);
+                    let folder = track
+                        .path
+                        .parent()
+                        .and_then(|parent| parent.strip_prefix(root).ok())
+                        .map(|path| path.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    folder == self.folder
+                }
                 _ => true,
             };
             if in_view
@@ -297,6 +483,7 @@ impl App {
         let next = match self.view.as_str() {
             "all" => "fav",
             "fav" => "recent",
+            "recent" => "folder",
             _ => "all",
         };
         self.set_view(next);
@@ -327,11 +514,18 @@ impl App {
             .map(|&index| &self.tracks[index])
     }
 
-    pub(crate) fn view_label(&self) -> &'static str {
+    pub(crate) fn view_label(&self) -> String {
         match self.view.as_str() {
-            "fav" => "收藏",
-            "recent" => "最近",
-            _ => "全部歌曲",
+            "fav" => "收藏".into(),
+            "recent" => "最近".into(),
+            "folder" => {
+                if self.folder.is_empty() {
+                    "文件夹 · 根目录".into()
+                } else {
+                    format!("文件夹 · {}", self.folder)
+                }
+            }
+            _ => "全部歌曲".into(),
         }
     }
 
@@ -366,7 +560,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::fade_volume;
+    use super::{cycle_rating, eq_graph, fade_volume, resume_target};
 
     #[test]
     fn sleep_fade_reaches_zero_at_deadline() {
@@ -374,5 +568,33 @@ mod tests {
         assert!((fade_volume(80.0, 5.0) - 40.0).abs() < 0.001);
         assert!((fade_volume(80.0, 0.0) - 0.0).abs() < 0.001);
         assert!((fade_volume(80.0, 30.0) - 80.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn eq_graph_skips_flat_bands() {
+        let mut gains = [0.0; 10];
+        gains[0] = 6.0;
+        gains[9] = -3.5;
+        let graph = eq_graph(&gains);
+        assert!(graph.starts_with("lavfi=["));
+        assert!(graph.contains("f=31:width_type=o:width=1:g=6.0"));
+        assert!(graph.contains("f=16000:width_type=o:width=1:g=-3.5"));
+        assert_eq!(graph.matches("equalizer=").count(), 2);
+        assert_eq!(eq_graph(&[0.0; 10]), "");
+    }
+
+    #[test]
+    fn resume_skips_start_and_tail() {
+        assert_eq!(resume_target(1.0, Some(200.0)), None);
+        assert_eq!(resume_target(42.0, Some(200.0)), Some(42.0));
+        assert_eq!(resume_target(198.0, Some(200.0)), None);
+        assert_eq!(resume_target(42.0, None), Some(42.0));
+    }
+
+    #[test]
+    fn rating_cycles_back_to_zero() {
+        assert_eq!(cycle_rating(0), 1);
+        assert_eq!(cycle_rating(4), 5);
+        assert_eq!(cycle_rating(5), 0);
     }
 }

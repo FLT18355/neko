@@ -1,4 +1,5 @@
 use crate::app::{App, Modal};
+use crate::keymap::{self, ACTIONS};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub fn handle_key(app: &mut App, key: KeyEvent) {
@@ -10,57 +11,16 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         handle_modal(app, key);
         return;
     }
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    match key.code {
-        KeyCode::Char('q') => app.quit = true,
-        KeyCode::Char(' ') => app.play_or_toggle(),
-        KeyCode::Enter => app.play_selected(),
-        KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
-        KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
-        KeyCode::PageDown => app.move_selection(10),
-        KeyCode::PageUp => app.move_selection(-10),
-        KeyCode::Char('g') | KeyCode::Home => app.select_edge(false),
-        KeyCode::Char('G') | KeyCode::End => app.select_edge(true),
-        KeyCode::Char('n') => app.skip(true),
-        KeyCode::Char('p') | KeyCode::Char('b') => app.skip(false),
-        KeyCode::Left => app.seek_relative(if shift { -30.0 } else { -5.0 }),
-        KeyCode::Right => app.seek_relative(if shift { 30.0 } else { 5.0 }),
-        KeyCode::Char('-') | KeyCode::Char('_') => app.volume_delta(-5.0),
-        KeyCode::Char('+') | KeyCode::Char('=') => app.volume_delta(5.0),
-        KeyCode::Char('m') => app.toggle_mute(),
-        KeyCode::Char('B') => app.toggle_transparent(),
-        KeyCode::Char('0') => app.reset_speed(),
-        KeyCode::Char('[') => app.cycle_speed(-0.05),
-        KeyCode::Char(']') => app.cycle_speed(0.05),
-        KeyCode::Char('L') => app.cycle_mode(),
-        KeyCode::Char('S') => app.shuffle_now(),
-        KeyCode::Char('f') => app.toggle_favorite(),
-        KeyCode::Char('1') => app.set_view("all"),
-        KeyCode::Char('2') => app.set_view("fav"),
-        KeyCode::Char('3') => app.set_view("recent"),
-        KeyCode::Tab => app.cycle_view(),
-        KeyCode::Char('/') => app.open_modal(Modal::Search),
-        KeyCode::Char('o') => app.open_modal(Modal::Directory),
-        KeyCode::Char('c') => app.open_modal(Modal::Settings),
-        KeyCode::Char('r') => app.rescan(),
-        KeyCode::Char('s') => app.cycle_sort(),
-        KeyCode::Char('e') => app.cycle_effect(),
-        KeyCode::Char('t') => app.cycle_sleep(),
-        KeyCode::Char('a') => app.cycle_ab(),
-        KeyCode::Char('l') => app.toggle_lyrics(),
-        KeyCode::Char('z') => app.lyrics_offset(-0.5),
-        KeyCode::Char('x') => app.lyrics_offset(0.5),
-        KeyCode::Char('y') => app.export_queue(),
-        KeyCode::Char('u') => app.open_modal(Modal::Queue),
-        KeyCode::Char('i') => app.open_modal(Modal::Info),
-        KeyCode::Char('?') => app.open_modal(Modal::Help),
-        KeyCode::Char(':') => app.open_modal(Modal::Seek),
-        KeyCode::Esc if !app.filter.is_empty() => {
-            app.filter.clear();
-            app.rebuild_visible();
-            app.notify("已清除搜索");
-        }
-        _ => {}
+    if app.lyrics_full && key.code == KeyCode::Esc {
+        app.lyrics_full = false;
+        app.notify("退出全屏歌词");
+        return;
+    }
+    let Some(name) = keymap::key_name(key) else {
+        return;
+    };
+    if let Some(action) = app.bindings.get(&name).copied() {
+        app.run_action(action);
     }
 }
 
@@ -91,7 +51,14 @@ fn handle_modal(app: &mut App, key: KeyEvent) {
         }
         return;
     }
-    let editing = matches!(modal, Modal::Search | Modal::Directory | Modal::Seek);
+    if modal == Modal::Keybindings {
+        handle_keybindings(app, key);
+        return;
+    }
+    let editing = matches!(
+        modal,
+        Modal::Search | Modal::Directory | Modal::Seek | Modal::PlaylistName
+    );
     if editing {
         match key.code {
             KeyCode::Esc => app.cancel_modal(),
@@ -122,16 +89,160 @@ fn handle_modal(app: &mut App, key: KeyEvent) {
         return;
     }
 
+    match modal {
+        Modal::Playlists => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
+            KeyCode::Up | KeyCode::Char('k') => app.playlist_move(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.playlist_move(1),
+            KeyCode::Enter => app.open_playlist_tracks(),
+            KeyCode::Char('n') => app.begin_playlist_create(),
+            KeyCode::Char('r') => app.begin_playlist_rename(),
+            KeyCode::Char('x') => app.delete_playlist(),
+            KeyCode::Char('a') => app.add_to_playlist(),
+            _ => {}
+        },
+        Modal::PlaylistTracks => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                app.open_modal(Modal::Playlists);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.playlist_song_selected = app.playlist_song_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let count = app
+                    .playlists
+                    .get(app.playlist_selected)
+                    .map(|list| list.songs.len())
+                    .unwrap_or(0);
+                app.playlist_song_selected =
+                    (app.playlist_song_selected + 1).min(count.saturating_sub(1));
+            }
+            KeyCode::Enter => app.play_playlist(app.playlist_song_selected),
+            KeyCode::Char('a') => app.add_to_playlist(),
+            KeyCode::Char('d') => app.remove_playlist_song(),
+            _ => {}
+        },
+        Modal::Folders => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
+            KeyCode::Up | KeyCode::Char('k') => app.folder_move(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.folder_move(1),
+            KeyCode::Enter => app.select_folder(),
+            _ => {}
+        },
+        Modal::Equalizer => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.eq_selected = app.eq_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.eq_selected = (app.eq_selected + 1).min(crate::app::EQ_BANDS.len());
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                let row = app.eq_selected;
+                app.adjust_eq(row, -1.0);
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                let row = app.eq_selected;
+                app.adjust_eq(row, 1.0);
+            }
+            KeyCode::Enter => {
+                let row = app.eq_selected;
+                if row == 0 {
+                    app.toggle_eq();
+                } else {
+                    let band = row - 1;
+                    let gain = app.cfg.eq_gains.get(band).copied().unwrap_or(0.0);
+                    app.adjust_eq(row, -gain);
+                }
+            }
+            KeyCode::Char('r') => app.reset_eq(),
+            _ => {}
+        },
+        Modal::AudioDevice => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
+            KeyCode::Up | KeyCode::Char('k') => app.device_move(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.device_move(1),
+            KeyCode::Enter => app.apply_device(),
+            KeyCode::Char('r') => app.open_modal(Modal::AudioDevice),
+            _ => {}
+        },
+        Modal::Stats => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.stats_scroll = app.stats_scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => app.stats_scroll += 1,
+            KeyCode::Char('x') => app.clear_stats(),
+            _ => {}
+        },
+        Modal::Queue => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.queue_selected = app.queue_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.queue_selected =
+                    (app.queue_selected + 1).min(app.session.len().saturating_sub(1));
+            }
+            KeyCode::Char('K') => app.queue_move(-1),
+            KeyCode::Char('J') => app.queue_move(1),
+            KeyCode::Char('d') => app.queue_remove(),
+            KeyCode::Char('x') => app.queue_clear(),
+            KeyCode::Enter => app.play_queue_index(app.queue_selected),
+            _ => {}
+        },
+        _ => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
+            KeyCode::Char('?') if modal != Modal::Help => {
+                app.close_modal();
+                app.open_modal(Modal::Help);
+            }
+            KeyCode::Char('j') | KeyCode::Down => app.modal_scroll += 1,
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.modal_scroll = app.modal_scroll.saturating_sub(1);
+            }
+            KeyCode::PageDown => app.modal_scroll += 10,
+            KeyCode::PageUp => app.modal_scroll = app.modal_scroll.saturating_sub(10),
+            _ => {}
+        },
+    }
+}
+
+fn handle_keybindings(app: &mut App, key: KeyEvent) {
+    if app.capture_key {
+        if key.code == KeyCode::Esc {
+            app.capture_key = false;
+            app.notify("已取消改键");
+            return;
+        }
+        let Some(name) = keymap::key_name(key) else {
+            return;
+        };
+        let action = ACTIONS[app.keybind_selected.min(ACTIONS.len() - 1)];
+        app.set_binding(action, name);
+        app.capture_key = false;
+        return;
+    }
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
-        KeyCode::Char('?') if modal != Modal::Help => {
-            app.close_modal();
-            app.open_modal(Modal::Help);
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.keybind_selected = app.keybind_selected.saturating_sub(1);
         }
-        KeyCode::Char('j') | KeyCode::Down => app.modal_scroll += 1,
-        KeyCode::Char('k') | KeyCode::Up => app.modal_scroll = app.modal_scroll.saturating_sub(1),
-        KeyCode::PageDown => app.modal_scroll += 10,
-        KeyCode::PageUp => app.modal_scroll = app.modal_scroll.saturating_sub(10),
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.keybind_selected = (app.keybind_selected + 1).min(ACTIONS.len() - 1);
+        }
+        KeyCode::PageUp => app.keybind_selected = app.keybind_selected.saturating_sub(10),
+        KeyCode::PageDown => {
+            app.keybind_selected = (app.keybind_selected + 10).min(ACTIONS.len() - 1);
+        }
+        KeyCode::Char('r') => {
+            let action = ACTIONS[app.keybind_selected];
+            app.reset_binding(action);
+        }
+        KeyCode::Enter => {
+            app.capture_key = true;
+            app.notify("按下新按键 · Esc 取消");
+        }
         _ => {}
     }
 }

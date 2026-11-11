@@ -12,8 +12,13 @@ pub struct Cache {
     pub last_position: f64,
     pub view: String,
     pub filter: String,
+    pub folder: String,
     pub selected_path: Option<String>,
     pub plays: HashMap<String, u64>,
+    pub ratings: HashMap<String, u8>,
+    pub positions: HashMap<String, f64>,
+    pub listen_seconds: HashMap<String, f64>,
+    pub total_seconds: f64,
 }
 
 pub fn cache_path() -> PathBuf {

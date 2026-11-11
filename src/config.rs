@@ -1,7 +1,14 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Playlist {
+    pub name: String,
+    pub songs: Vec<String>,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -16,6 +23,13 @@ pub struct Config {
     pub time_remaining: bool,
     pub transparent: bool,
     pub favorites: Vec<String>,
+    pub playlists: Vec<Playlist>,
+    pub theme: String,
+    pub eq_on: bool,
+    pub eq_gains: Vec<f64>,
+    pub audio_device: String,
+    pub resume: bool,
+    pub keys: HashMap<String, String>,
 }
 
 impl Default for Config {
@@ -31,6 +45,13 @@ impl Default for Config {
             time_remaining: false,
             transparent: false,
             favorites: Vec::new(),
+            playlists: Vec::new(),
+            theme: "mocha".into(),
+            eq_on: false,
+            eq_gains: vec![0.0; 10],
+            audio_device: String::new(),
+            resume: true,
+            keys: HashMap::new(),
         }
     }
 }
@@ -115,5 +136,35 @@ impl Config {
     pub fn is_favorite(&self, path: &Path) -> bool {
         let value = path.to_string_lossy();
         self.favorites.iter().any(|p| p == value.as_ref())
+    }
+}
+
+impl Playlist {
+    pub fn add(&mut self, path: &Path) -> bool {
+        let value = path.to_string_lossy().to_string();
+        if self.songs.contains(&value) {
+            return false;
+        }
+        self.songs.push(value);
+        true
+    }
+
+    pub fn remove(&mut self, index: usize) -> Option<String> {
+        (index < self.songs.len()).then(|| self.songs.remove(index))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playlist_adds_once_and_removes() {
+        let mut list = Playlist::default();
+        assert!(list.add(Path::new("/a.mp3")));
+        assert!(!list.add(Path::new("/a.mp3")));
+        assert_eq!(list.remove(0).as_deref(), Some("/a.mp3"));
+        assert!(list.songs.is_empty());
+        assert!(list.remove(0).is_none());
     }
 }

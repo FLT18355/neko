@@ -7,13 +7,21 @@ use crate::library;
 pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
     let width = canvas.width();
     let height = canvas.height();
-    canvas.fill(0, 0, width, height, Style::new(TEXT, BASE));
+    canvas.fill(0, 0, width, height, Style::new(txt(), base()));
     if width < 64 || height < 14 {
         canvas.centered(
             height / 2,
             "终端太小啦喵，放大一点再玩",
-            Style::new(PINK, BASE).bold(),
+            Style::new(pink(), base()).bold(),
         );
+        return;
+    }
+
+    if app.lyrics_full {
+        views::draw_full_lyrics(canvas, app);
+        if let Some(modal) = app.modal {
+            views::draw_modal(canvas, app, modal, hover, hits);
+        }
         return;
     }
 
@@ -36,14 +44,14 @@ pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
         body_y,
         left_width,
         panel_height,
-        Style::new(TEXT, MANTLE),
+        Style::new(txt(), mantle()),
     );
     canvas.fill(
         right_x,
         body_y,
         right_width,
         panel_height,
-        Style::new(TEXT, MANTLE),
+        Style::new(txt(), mantle()),
     );
     let library_title = format!(
         "{} {} · {} 首{}",
@@ -62,7 +70,7 @@ pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
         left_width,
         panel_height,
         &library_title,
-        Style::new(SURFACE1, MANTLE),
+        Style::new(surface1(), mantle()),
     );
     canvas.border(
         right_x,
@@ -70,7 +78,7 @@ pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
         right_width,
         panel_height,
         &format!("{} 正在播放", PAW),
-        Style::new(SURFACE1, MANTLE),
+        Style::new(surface1(), mantle()),
     );
 
     draw_library(
@@ -94,7 +102,7 @@ pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
         hits,
     );
 
-    draw_gradient_line(canvas, separator_y, PINK, MAUVE, LAVENDER);
+    draw_gradient_line(canvas, separator_y, pink(), mauve(), lavender());
     draw_footer(canvas, app, footer_y, width, height, hover, hits);
 
     if let Some(modal) = app.modal {
@@ -116,36 +124,37 @@ fn draw_gradient_line(canvas: &mut Canvas, y: usize, start: Rgb, middle: Rgb, en
             (from.1 as f64 + (to.1 as f64 - from.1 as f64) * local) as u8,
             (from.2 as f64 + (to.2 as f64 - from.2 as f64) * local) as u8,
         );
-        canvas.put(column, y, "─", Style::new(color, BASE));
+        canvas.put(column, y, "─", Style::new(color, base()));
     }
 }
 
 fn draw_header(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
     let width = canvas.width();
-    canvas.fill(0, 0, width, 1, Style::new(TEXT, CRUST));
+    canvas.fill(0, 0, width, 1, Style::new(txt(), crust()));
     canvas.put(
         1,
         0,
         &format!("{} neko", NOTE),
-        Style::new(PINK, CRUST).bold(),
+        Style::new(pink(), crust()).bold(),
     );
-    canvas.put(8, 0, "本地音乐", Style::new(OVERLAY0, CRUST));
-    canvas.put(17, 0, "│", Style::new(SURFACE1, CRUST));
+    canvas.put(8, 0, "本地音乐", Style::new(overlay0(), crust()));
+    canvas.put(17, 0, "│", Style::new(surface1(), crust()));
 
     let mut x = 20;
     let tabs = [
         ("全部", app.view == "all"),
         ("收藏", app.view == "fav"),
         ("最近", app.view == "recent"),
+        ("文件夹", app.view == "folder"),
     ];
     for (index, (label, active)) in tabs.into_iter().enumerate() {
         let hovered = hover == Some(Hit::Tab(index));
         let style = if active {
-            Style::new(CRUST, PINK).bold()
+            Style::new(crust(), pink()).bold()
         } else if hovered {
-            Style::new(ROSEWATER, SURFACE0).bold()
+            Style::new(selected_fg(), surface0()).bold()
         } else {
-            Style::new(SUBTEXT0, CRUST)
+            Style::new(sub0(), crust())
         };
         let text = format!(" {label} ");
         let width = text_width(&text);
@@ -177,10 +186,10 @@ fn draw_header(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Ve
             width - status_width - 2,
             0,
             &status,
-            Style::new(if state.pause { OVERLAY0 } else { SUBTEXT1 }, CRUST),
+            Style::new(if state.pause { overlay0() } else { sub1() }, crust()),
         );
     }
-    draw_gradient_line(canvas, 1, SURFACE0, SURFACE1, MAUVE);
+    draw_gradient_line(canvas, 1, surface0(), surface1(), mauve());
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -204,7 +213,7 @@ fn draw_library(
         for (row, line) in art.iter().enumerate() {
             let text = line.trim_end();
             let offset = (width.saturating_sub(text_width(text))) / 2;
-            canvas.put(x + offset, start + row, text, Style::new(MAUVE, MANTLE));
+            canvas.put(x + offset, start + row, text, Style::new(mauve(), mantle()));
         }
         let hint = "空空的喵…按 o 换个目录";
         let offset = (width.saturating_sub(text_width(hint))) / 2;
@@ -212,7 +221,7 @@ fn draw_library(
             x + offset,
             start + art.len() + 1,
             hint,
-            Style::new(OVERLAY0, MANTLE),
+            Style::new(overlay0(), mantle()),
         );
         return;
     }
@@ -230,44 +239,53 @@ fn draw_library(
         let hovered = hover == Some(Hit::Row(index));
         let playing = current.as_ref() == Some(&track.path);
         let background = if selected {
-            SURFACE0
+            surface0()
         } else if hovered {
-            (39, 40, 56)
+            mix(mantle(), surface0(), 0.5)
         } else {
-            MANTLE
+            mantle()
         };
-        canvas.fill(x, y, width, 1, Style::new(TEXT, background));
+        canvas.fill(x, y, width, 1, Style::new(txt(), background));
         hits.push((Hit::Row(index), Rect::new(x, y, width, 1)));
         canvas.put(
             x,
             y,
             if selected { "▌" } else { " " },
-            Style::new(PINK, background),
+            Style::new(pink(), background),
         );
         canvas.put(
             x + 1,
             y,
             if playing { NOTE } else { " " },
-            Style::new(PINK, background).bold(),
+            Style::new(pink(), background).bold(),
         );
         canvas.put(
             x + 3,
             y,
             &format!("{:>3}", index + 1),
-            Style::new(OVERLAY0, background),
+            Style::new(overlay0(), background),
         );
         if app.cfg.is_favorite(&track.path) {
-            canvas.put(x + 7, y, HEART, Style::new(MAROON, background));
+            canvas.put(x + 7, y, HEART, Style::new(maroon(), background));
+        }
+        let rating = app.rating_of(&track.path);
+        if rating > 0 {
+            canvas.put(
+                x + 8,
+                y,
+                &format!("★{rating}"),
+                Style::new(yellow(), background),
+            );
         }
         let title_style = if playing {
-            Style::new(PINK, background).bold()
+            Style::new(pink(), background).bold()
         } else if selected {
-            Style::new(ROSEWATER, background).bold()
+            Style::new(selected_fg(), background).bold()
         } else {
-            Style::new(TEXT, background)
+            Style::new(txt(), background)
         };
-        let title_x = x + 9;
-        let title_width = width.saturating_sub(11);
+        let title_x = x + 11;
+        let title_width = width.saturating_sub(13);
         canvas.put(
             title_x,
             y,
@@ -287,7 +305,7 @@ fn draw_library(
                         x + width - folder_width - 2,
                         y,
                         &text,
-                        Style::new(OVERLAY0, background),
+                        Style::new(overlay0(), background),
                     );
                 }
             }
@@ -305,7 +323,7 @@ fn draw_library(
                 right,
                 top + row,
                 if thumb { "▐" } else { "│" },
-                Style::new(if thumb { LAVENDER } else { SURFACE0 }, MANTLE),
+                Style::new(if thumb { lavender() } else { surface0() }, mantle()),
             );
         }
     }
@@ -331,7 +349,7 @@ fn draw_now_playing(
         let start = top + height.saturating_sub(art.len() + 3) / 2;
         for (row, line) in art.iter().enumerate() {
             let offset = (width.saturating_sub(text_width(line))) / 2;
-            canvas.put(x + offset, start + row, line, Style::new(MAUVE, MANTLE));
+            canvas.put(x + offset, start + row, line, Style::new(mauve(), mantle()));
         }
         let hint = "选一首歌，按 Enter 开始喵";
         let offset = (width.saturating_sub(text_width(hint))) / 2;
@@ -339,7 +357,7 @@ fn draw_now_playing(
             x + offset,
             start + art.len() + 1,
             hint,
-            Style::new(OVERLAY0, MANTLE),
+            Style::new(overlay0(), mantle()),
         );
         return;
     };
@@ -356,7 +374,7 @@ fn draw_now_playing(
         .unwrap_or_else(|| "未知曲目".into());
     let mut y = top;
     for line in wrap(&title, width, 2) {
-        canvas.put(x, y, &line, Style::new(ROSEWATER, MANTLE).bold());
+        canvas.put(x, y, &line, Style::new(txt(), mantle()).bold());
         y += 1;
     }
     let artist = state
@@ -384,7 +402,7 @@ fn draw_now_playing(
             x,
             y,
             &truncate(&subtitle, width),
-            Style::new(SUBTEXT1, MANTLE),
+            Style::new(sub1(), mantle()),
         );
     }
     y += 2;
@@ -402,11 +420,11 @@ fn draw_now_playing(
     for column in 0..bar_width {
         let (ch, color) = if column < filled {
             let local = column as f64 / bar_width.max(1) as f64;
-            ("━", mix(PINK, MAUVE, local))
+            ("━", mix(pink(), mauve(), local))
         } else {
-            ("─", SURFACE1)
+            ("─", surface1())
         };
-        canvas.put(x + column, bar_y, ch, Style::new(color, MANTLE));
+        canvas.put(x + column, bar_y, ch, Style::new(color, mantle()));
     }
     hits.push((Hit::Progress, Rect::new(x, bar_y, bar_width.max(1), 1)));
     y += 1;
@@ -420,9 +438,9 @@ fn draw_now_playing(
     let clock_text = format!("{time_label} / {total}");
     let clock_width = text_width(&clock_text);
     let clock_style = if hover == Some(Hit::Time) {
-        Style::new(PINK, MANTLE).bold()
+        Style::new(pink(), mantle()).bold()
     } else {
-        Style::new(SUBTEXT0, MANTLE)
+        Style::new(sub0(), mantle())
     };
     canvas.put(x, y, &clock_text, clock_style);
     hits.push((Hit::Time, Rect::new(x, y, clock_width, 1)));
@@ -431,9 +449,9 @@ fn draw_now_playing(
     let forward_x = x + width.saturating_sub(5);
     let button_style = |hit: Hit| {
         if hover == Some(hit) {
-            Style::new(PINK, SURFACE0).bold()
+            Style::new(pink(), surface0()).bold()
         } else {
-            Style::new(OVERLAY0, MANTLE)
+            Style::new(overlay0(), mantle())
         }
     };
     canvas.put(back_x, y, "-5s", button_style(Hit::SeekBack));
@@ -445,9 +463,9 @@ fn draw_now_playing(
     let mute_x = x;
     let mute_icon = if state.mute { MUTE } else { VOL };
     let mute_style = if hover == Some(Hit::MuteButton) {
-        Style::new(PINK, SURFACE0).bold()
+        Style::new(pink(), surface0()).bold()
     } else {
-        Style::new(SUBTEXT0, MANTLE)
+        Style::new(sub0(), mantle())
     };
     canvas.put(mute_x, y, mute_icon, mute_style);
     hits.push((Hit::MuteButton, Rect::new(mute_x, y, 1, 1)));
@@ -464,11 +482,11 @@ fn draw_now_playing(
     for column in 0..slider_width {
         let ch = if column < volume_filled { "━" } else { "─" };
         let color = if column < volume_filled {
-            LAVENDER
+            lavender()
         } else {
-            SURFACE1
+            surface1()
         };
-        canvas.put(slider_x + column, y, ch, Style::new(color, MANTLE));
+        canvas.put(slider_x + column, y, ch, Style::new(color, mantle()));
     }
     if !state.mute && volume_filled < slider_width {
         canvas.put(
@@ -477,11 +495,11 @@ fn draw_now_playing(
             "●",
             Style::new(
                 if hover == Some(Hit::Volume) {
-                    PINK
+                    pink()
                 } else {
-                    MAUVE
+                    mauve()
                 },
-                MANTLE,
+                mantle(),
             ),
         );
     }
@@ -490,17 +508,17 @@ fn draw_now_playing(
         x + width.saturating_sub(percent_width),
         y,
         &percent,
-        Style::new(OVERLAY0, MANTLE),
+        Style::new(overlay0(), mantle()),
     );
     y += 1;
 
     let mut chip_x = x;
-    chip_x = draw_chip(canvas, chip_x, y, app.mode_label(), PINK);
+    chip_x = draw_chip(canvas, chip_x, y, app.mode_label(), pink());
     if (state.speed - 1.0).abs() > 0.001 {
-        chip_x = draw_chip(canvas, chip_x, y, &format!("{:.2}x", state.speed), PEACH);
+        chip_x = draw_chip(canvas, chip_x, y, &format!("{:.2}x", state.speed), peach());
     }
     if state.pause {
-        chip_x = draw_chip(canvas, chip_x, y, "已暂停", ROSEWATER);
+        chip_x = draw_chip(canvas, chip_x, y, "已暂停", txt());
     }
     if let Some(deadline) = app.sleep_at {
         let minutes = deadline
@@ -508,7 +526,13 @@ fn draw_now_playing(
             .as_secs()
             .div_ceil(60)
             .max(1);
-        chip_x = draw_chip(canvas, chip_x, y, &format!("{} {minutes}m", CLOCK), YELLOW);
+        chip_x = draw_chip(
+            canvas,
+            chip_x,
+            y,
+            &format!("{} {minutes}m", CLOCK),
+            yellow(),
+        );
     }
     if let (Some(position), Some(count)) = (state.playlist_pos, state.playlist_count) {
         let _ = draw_chip(
@@ -516,13 +540,13 @@ fn draw_now_playing(
             chip_x,
             y,
             &format!("{}/{}", position + 1, count),
-            LAVENDER,
+            lavender(),
         );
     }
     y += 1;
 
     for column in 0..width {
-        canvas.put(x + column, y, "─", Style::new(SURFACE0, MANTLE));
+        canvas.put(x + column, y, "─", Style::new(surface0(), mantle()));
     }
     y += 1;
 
@@ -531,7 +555,7 @@ fn draw_now_playing(
     } else {
         "歌词".into()
     };
-    canvas.put(x, y, &lyrics_title, Style::new(PINK, MANTLE).bold());
+    canvas.put(x, y, &lyrics_title, Style::new(pink(), mantle()).bold());
     y += 1;
     if app.lyrics_enabled() {
         if let Some((index, lines)) = app.current_lyric() {
@@ -543,18 +567,33 @@ fn draw_now_playing(
                         x,
                         y,
                         &format!("{} {}", NOTE, truncate(text, width.saturating_sub(2))),
-                        Style::new(PINK, MANTLE).bold(),
+                        Style::new(pink(), mantle()).bold(),
                     );
                 } else {
-                    canvas.put(x, y, &truncate(text, width), Style::new(OVERLAY0, MANTLE));
+                    canvas.put(
+                        x,
+                        y,
+                        &truncate(text, width),
+                        Style::new(overlay0(), mantle()),
+                    );
                 }
                 y += 1;
             }
         } else {
-            canvas.put(x, y, "没有找到同名的 .lrc 喵", Style::new(OVERLAY0, MANTLE));
+            canvas.put(
+                x,
+                y,
+                "没有找到同名的 .lrc 喵",
+                Style::new(overlay0(), mantle()),
+            );
         }
     } else {
-        canvas.put(x, y, "歌词已关闭 · 按 l 打开", Style::new(OVERLAY0, MANTLE));
+        canvas.put(
+            x,
+            y,
+            "歌词已关闭 · 按 l 打开",
+            Style::new(overlay0(), mantle()),
+        );
     }
 
     let info = match (state.audio.as_ref(), state.bitrate) {
@@ -582,7 +621,7 @@ fn draw_now_playing(
             x,
             top + height - 1,
             &truncate(&info, width),
-            Style::new(SURFACE2, MANTLE),
+            Style::new(surface2(), mantle()),
         );
     }
 }
@@ -597,9 +636,10 @@ fn mix(from: Rgb, to: Rgb, ratio: f64) -> Rgb {
 }
 
 fn draw_chip(canvas: &mut Canvas, x: usize, y: usize, text: &str, color: Rgb) -> usize {
+    let color = crate::theme::shade(color);
     let label = format!(" {text} ");
     let width = text_width(&label);
-    canvas.put(x, y, &label, Style::new(color, SURFACE0));
+    canvas.put(x, y, &label, Style::new(color, surface0()));
     x + width + 1
 }
 
@@ -613,7 +653,7 @@ fn draw_footer(
     hover: Option<Hit>,
     hits: &mut Vec<(Hit, Rect)>,
 ) {
-    canvas.fill(0, y, width, height - y, Style::new(TEXT, CRUST));
+    canvas.fill(0, y, width, height - y, Style::new(txt(), crust()));
     let message = hover
         .map(|hit| hit.label().to_string())
         .or_else(|| {
@@ -627,14 +667,14 @@ fn draw_footer(
                 "{} {} · {} · 音量 {:.0}%",
                 if app.mpv.state.pause { PAUSE } else { PLAY },
                 app.mode_label(),
-                app.cfg.effect,
+                app.effect_label(),
                 app.mpv.state.volume
             )
         });
     let style = if hover.is_some() {
-        Style::new(LAVENDER, MANTLE).bold()
+        Style::new(lavender(), mantle()).bold()
     } else {
-        Style::new(PINK, MANTLE)
+        Style::new(pink(), mantle())
     };
     let line = format!("{} {message}", PAW);
     canvas.fill(
@@ -642,7 +682,7 @@ fn draw_footer(
         y,
         text_width(&line).min(width.saturating_sub(4)) + 2,
         1,
-        Style::new(TEXT, SURFACE0),
+        Style::new(txt(), surface0()),
     );
     canvas.put(3, y, &truncate(&line, width.saturating_sub(6)), style);
     if height <= y + 1 {
@@ -804,9 +844,9 @@ fn control(
     }
     let active = hover == Some(hit);
     let style = if active {
-        Style::new(PINK, SURFACE0).bold()
+        Style::new(pink(), surface0()).bold()
     } else {
-        Style::new(SUBTEXT0, MANTLE)
+        Style::new(sub0(), mantle())
     };
     canvas.fill(x, y, button_width, 1, Style::new(style.fg, style.bg));
     canvas.put(x + 1, y, &text, style);

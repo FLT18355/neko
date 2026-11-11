@@ -92,6 +92,24 @@ fn take<T: DeserializeOwned>(values: &mut HashMap<String, Value>, key: &str) -> 
         .and_then(|value| serde_json::from_value(value).ok())
 }
 
+fn parse_audio_devices(value: &Value) -> Vec<(String, String)> {
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let name = item.get("name")?.as_str()?.to_string();
+            let description = item
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or(&name)
+                .to_string();
+            Some((name, description))
+        })
+        .collect()
+}
+
 impl Mpv {
     pub fn spawn(volume: f64) -> io::Result<Self> {
         #[cfg(unix)]
@@ -375,6 +393,36 @@ impl Mpv {
             .collect()
     }
 
+    pub fn audio_devices(&mut self) -> Vec<(String, String)> {
+        let Ok(Some(value)) = self.send(vec![json!("get_property"), json!("audio-device-list")])
+        else {
+            return Vec::new();
+        };
+        parse_audio_devices(&value)
+    }
+
+    pub fn set_audio_device(&mut self, name: &str) -> Result<(), String> {
+        self.set_prop("audio-device", json!(name))
+    }
+
+    pub fn playlist_move(&mut self, from: i64, to: i64) -> Result<(), String> {
+        self.send(vec![json!("playlist-move"), json!(from), json!(to)])
+            .map(|_| ())
+    }
+
+    pub fn playlist_remove(&mut self, index: i64) -> Result<(), String> {
+        self.send(vec![json!("playlist-remove"), json!(index)])
+            .map(|_| ())
+    }
+
+    pub fn playlist_clear(&mut self) -> Result<(), String> {
+        self.send(vec![json!("playlist-clear")]).map(|_| ())
+    }
+
+    pub fn stop(&mut self) -> Result<(), String> {
+        self.send(vec![json!("stop")]).map(|_| ())
+    }
+
     pub fn quit(&mut self) {
         let _ = self.writer.write_all(b"{\"command\":[\"quit\"]}\n");
         for _ in 0..20 {
@@ -392,5 +440,27 @@ impl Mpv {
 impl Drop for Mpv {
     fn drop(&mut self) {
         self.quit();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_audio_devices_and_skips_bad_entries() {
+        let value = json!([
+            {"name": "auto", "description": "自动选择"},
+            {"description": "没有名字"},
+            {"name": "pulse/1", "description": "扬声器"}
+        ]);
+        assert_eq!(
+            parse_audio_devices(&value),
+            vec![
+                ("auto".to_string(), "自动选择".to_string()),
+                ("pulse/1".to_string(), "扬声器".to_string())
+            ]
+        );
+        assert!(parse_audio_devices(&json!(null)).is_empty());
     }
 }

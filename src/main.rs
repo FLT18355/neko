@@ -1,9 +1,11 @@
 mod app;
 mod cache;
 mod config;
+mod keymap;
 mod library;
 mod lyrics;
 mod mpv;
+mod theme;
 mod ui;
 
 use app::App;
