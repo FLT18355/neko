@@ -106,7 +106,7 @@ fn main() {
         if event::poll(Duration::from_millis(120)).unwrap_or(false) {
             match event::read() {
                 Ok(Event::Key(key)) if key.kind != KeyEventKind::Release => {
-                    ui::handle_key(&mut app, key);
+                    ui::handle_key(&mut app, &mut ui_state, key);
                 }
                 Ok(Event::Mouse(mouse)) => {
                     ui::handle_mouse(&mut app, &mut ui_state, mouse);

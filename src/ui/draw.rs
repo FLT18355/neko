@@ -18,7 +18,7 @@ pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
     }
 
     if app.lyrics_full {
-        views::draw_full_lyrics(canvas, app);
+        views::draw_full_lyrics(canvas, app, hover, hits);
         if let Some(modal) = app.modal {
             views::draw_modal(canvas, app, modal, hover, hits);
         }
@@ -342,6 +342,10 @@ fn draw_library(
                 Style::new(if thumb { lavender() } else { surface0() }, mantle()),
             );
         }
+        hits.push((
+            Hit::Scrollbar,
+            Rect::new(x + width.saturating_sub(2), top, 2, rows),
+        ));
     }
 }
 
@@ -414,8 +418,17 @@ fn draw_now_playing(
     let title_lines = wrap(&title, width.saturating_sub(4), 2);
     let card_height = title_lines.len() + usize::from(!subtitle.is_empty());
     if card_height > 0 && card_height < height {
-        let card_bg = mix(mantle(), surface0(), 0.55);
+        let card_bg = mix(
+            mantle(),
+            surface0(),
+            if hover == Some(Hit::TrackInfo) {
+                0.8
+            } else {
+                0.55
+            },
+        );
         canvas.fill(x, y, width, card_height, Style::new(txt(), card_bg));
+        hits.push((Hit::TrackInfo, Rect::new(x, y, width, card_height)));
         for (row, line) in title_lines.iter().enumerate() {
             canvas.put(x + 1, y + row, "▎", Style::new(pink(), card_bg).bold());
             canvas.put(
@@ -543,6 +556,16 @@ fn draw_now_playing(
         };
         canvas.put(x, y, &clock_text, clock_style);
         hits.push((Hit::Time, Rect::new(x, y, clock_width, 1)));
+        let percent_text = format!("{:.0}%", ratio * 100.0);
+        let percent_x = x + width.saturating_sub(17);
+        if percent_x > x + clock_width + 1 {
+            canvas.put(
+                percent_x,
+                y,
+                &percent_text,
+                Style::new(surface2(), mantle()),
+            );
+        }
 
         let back_x = x + width.saturating_sub(11);
         let forward_x = x + width.saturating_sub(5);
@@ -615,13 +638,44 @@ fn draw_now_playing(
     }
 
     if y < bottom {
+        let limit = x + width;
         let mut chip_x = x;
-        chip_x = draw_chip(canvas, chip_x, y, app.mode_label(), pink());
+        chip_x = draw_chip(
+            canvas,
+            chip_x,
+            y,
+            limit,
+            app.mode_label(),
+            pink(),
+            Some(Hit::ModeChip),
+            hover,
+            hits,
+        );
         if (state.speed - 1.0).abs() > 0.001 {
-            chip_x = draw_chip(canvas, chip_x, y, &format!("{:.2}x", state.speed), peach());
+            chip_x = draw_chip(
+                canvas,
+                chip_x,
+                y,
+                limit,
+                &format!("{:.2}x", state.speed),
+                peach(),
+                Some(Hit::SpeedChip),
+                hover,
+                hits,
+            );
         }
         if state.pause {
-            chip_x = draw_chip(canvas, chip_x, y, "已暂停", txt());
+            chip_x = draw_chip(
+                canvas,
+                chip_x,
+                y,
+                limit,
+                "已暂停",
+                txt(),
+                Some(Hit::PauseChip),
+                hover,
+                hits,
+            );
         }
         if let Some(deadline) = app.sleep_at {
             let minutes = deadline
@@ -633,17 +687,84 @@ fn draw_now_playing(
                 canvas,
                 chip_x,
                 y,
+                limit,
                 &format!("{} {minutes}m", CLOCK),
                 yellow(),
+                Some(Hit::SleepChip),
+                hover,
+                hits,
             );
         }
         if let (Some(position), Some(count)) = (state.playlist_pos, state.playlist_count) {
+            chip_x = draw_chip(
+                canvas,
+                chip_x,
+                y,
+                limit,
+                &format!("{}/{}", position + 1, count),
+                lavender(),
+                Some(Hit::QueueChip),
+                hover,
+                hits,
+            );
+        }
+        if app.a_point.is_some() || app.b_point.is_some() {
+            let label = match (app.a_point, app.b_point) {
+                (Some(_), Some(_)) => "A-B",
+                (Some(_), None) => "A-B A",
+                _ => "A-B B",
+            };
+            chip_x = draw_chip(
+                canvas,
+                chip_x,
+                y,
+                limit,
+                label,
+                maroon(),
+                Some(Hit::AbChip),
+                hover,
+                hits,
+            );
+        }
+        if app.cfg.eq_on {
             let _ = draw_chip(
                 canvas,
                 chip_x,
                 y,
-                &format!("{}/{}", position + 1, count),
-                lavender(),
+                limit,
+                "EQ",
+                peach(),
+                Some(Hit::EqChip),
+                hover,
+                hits,
+            );
+        }
+        y += 1;
+    }
+
+    if y < bottom {
+        if let Some(track) = app.next_track() {
+            let title = truncate(&track.title, width.saturating_sub(11));
+            canvas.put(
+                x,
+                y,
+                &format!("{NEXT} 下一首  {title}"),
+                Style::new(
+                    if hover == Some(Hit::NextPreview) {
+                        pink()
+                    } else {
+                        sub1()
+                    },
+                    mantle(),
+                ),
+            );
+            hits.push((Hit::NextPreview, Rect::new(x, y, width, 1)));
+        } else {
+            canvas.put(
+                x,
+                y,
+                &format!("{NEXT} 队列结尾"),
+                Style::new(overlay0(), mantle()),
             );
         }
         y += 1;
@@ -663,12 +784,25 @@ fn draw_now_playing(
     }
 
     if y < bottom {
+        let lyrics_header = format!("{} 歌词", NOTE);
         canvas.put(
             x,
             y,
-            &format!("{} 歌词", NOTE),
-            Style::new(pink(), mantle()).bold(),
+            &lyrics_header,
+            Style::new(
+                if hover == Some(Hit::LyricsFull) {
+                    lavender()
+                } else {
+                    pink()
+                },
+                mantle(),
+            )
+            .bold(),
         );
+        hits.push((
+            Hit::LyricsFull,
+            Rect::new(x, y, text_width(&lyrics_header), 1),
+        ));
         if app.lrc_offset.abs() > 0.01 {
             let offset = format!("{:+.1}s", app.lrc_offset);
             let offset_width = text_width(&offset);
@@ -772,11 +906,39 @@ fn mix(from: Rgb, to: Rgb, ratio: f64) -> Rgb {
     )
 }
 
-fn draw_chip(canvas: &mut Canvas, x: usize, y: usize, text: &str, color: Rgb) -> usize {
+#[allow(clippy::too_many_arguments)]
+fn draw_chip(
+    canvas: &mut Canvas,
+    x: usize,
+    y: usize,
+    limit: usize,
+    text: &str,
+    color: Rgb,
+    hit: Option<Hit>,
+    hover: Option<Hit>,
+    hits: &mut Vec<(Hit, Rect)>,
+) -> usize {
     let color = crate::theme::shade(color);
     let label = format!(" {text} ");
     let width = text_width(&label);
-    canvas.put(x, y, &label, Style::new(color, surface0()));
+    if x + width > limit {
+        return x;
+    }
+    let active = hit.is_some() && hover == hit;
+    let background = if active { surface1() } else { surface0() };
+    canvas.put(
+        x,
+        y,
+        &label,
+        if active {
+            Style::new(pink(), background).bold()
+        } else {
+            Style::new(color, background)
+        },
+    );
+    if let Some(hit) = hit {
+        hits.push((hit, Rect::new(x, y, width, 1)));
+    }
     x + width + 1
 }
 

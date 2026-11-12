@@ -154,14 +154,7 @@ fn handle_modal(app: &mut App, key: KeyEvent) {
                 app.adjust_eq(row, 1.0);
             }
             KeyCode::Enter => {
-                let row = app.eq_selected;
-                if row == 0 {
-                    app.toggle_eq();
-                } else {
-                    let band = row - 1;
-                    let gain = app.cfg.eq_gains.get(band).copied().unwrap_or(0.0);
-                    app.adjust_eq(row, -gain);
-                }
+                app.activate_eq_row();
             }
             KeyCode::Char('r') => app.reset_eq(),
             _ => {}
@@ -248,8 +241,7 @@ fn handle_keybindings(app: &mut App, key: KeyEvent) {
             app.reset_binding(action);
         }
         KeyCode::Enter => {
-            app.capture_key = true;
-            app.notify("按下新按键 · Esc 取消");
+            app.begin_capture_binding();
         }
         _ => {}
     }

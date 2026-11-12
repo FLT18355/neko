@@ -988,6 +988,21 @@ impl App {
         self.notify("均衡器已拉平");
     }
 
+    pub(crate) fn activate_eq_row(&mut self) {
+        if self.eq_selected == 0 {
+            self.toggle_eq();
+            return;
+        }
+        let band = self.eq_selected - 1;
+        let gain = self.cfg.eq_gains.get(band).copied().unwrap_or(0.0);
+        self.adjust_eq(self.eq_selected, -gain);
+    }
+
+    pub(crate) fn begin_capture_binding(&mut self) {
+        self.capture_key = true;
+        self.notify("按下新按键 · Esc 取消");
+    }
+
     pub(crate) fn device_move(&mut self, delta: isize) {
         if self.devices.is_empty() {
             return;

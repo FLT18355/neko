@@ -11,6 +11,7 @@ use crossterm::terminal::{
 use std::io::{self, Stdout, Write};
 use unicode_width::UnicodeWidthChar;
 
+use crate::app::Modal;
 pub use crate::theme::Rgb;
 use crate::theme::*;
 
@@ -276,6 +277,51 @@ impl Rect {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModalButton {
+    Close,
+    Confirm,
+    Cancel,
+    New,
+    Rename,
+    Delete,
+    Add,
+    Play,
+    Reset,
+    Clear,
+    Apply,
+    Refresh,
+    Capture,
+    MoveUp,
+    MoveDown,
+    Remove,
+    Open,
+}
+
+impl ModalButton {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Close => "关闭 Esc",
+            Self::Confirm => "确定 Enter",
+            Self::Cancel => "取消 Esc",
+            Self::New => "新建 n",
+            Self::Rename => "改名 r",
+            Self::Delete => "删除 x",
+            Self::Add => "加入 a",
+            Self::Play => "播放 Enter",
+            Self::Reset => "恢复 r",
+            Self::Clear => "清空 x",
+            Self::Apply => "应用 Enter",
+            Self::Refresh => "重读 r",
+            Self::Capture => "改键 Enter",
+            Self::MoveUp => "上移 K",
+            Self::MoveDown => "下移 J",
+            Self::Remove => "移出 d",
+            Self::Open => "打开 Enter",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
     Tab(usize),
     Row(usize),
@@ -296,10 +342,28 @@ pub enum Hit {
     SeekBack,
     SeekForward,
     Time,
+    Scrollbar,
+    ModeChip,
+    SpeedChip,
+    PauseChip,
+    SleepChip,
+    QueueChip,
+    AbChip,
+    EqChip,
+    NextPreview,
+    TrackInfo,
+    LyricsFull,
+    LyricsFullBack,
     QueueRow(usize),
     SettingRow(usize),
     SettingLeft(usize),
     SettingRight(usize),
+    ModalRow(usize),
+    EqualizerRow(usize),
+    EqualizerLeft(usize),
+    EqualizerRight(usize),
+    BrowseTab(bool),
+    ModalButton(ModalButton),
     ModalPanel,
 }
 
@@ -330,9 +394,28 @@ impl Hit {
             Hit::SeekBack => "后退 5 秒 · ←",
             Hit::SeekForward => "前进 5 秒 · →",
             Hit::Time => "点击切换已播放 / 剩余时间",
-            Hit::QueueRow(_) => "点击播放这首",
-            Hit::SettingRow(_) => "单击选中设置项",
+            Hit::Scrollbar => "点击或拖动跳转列表",
+            Hit::ModeChip => "切换播放模式 · L",
+            Hit::SpeedChip => "恢复 1.00x · 0",
+            Hit::PauseChip => "播放 / 暂停 · 空格",
+            Hit::SleepChip => "睡眠定时 · t",
+            Hit::QueueChip => "打开播放队列 · u",
+            Hit::AbChip => "A-B 循环 · a",
+            Hit::EqChip => "打开均衡器 · E",
+            Hit::NextPreview => "下一首 · n",
+            Hit::TrackInfo => "曲目详情 · i",
+            Hit::LyricsFull => "全屏歌词 · F",
+            Hit::LyricsFullBack => "返回 · Esc",
+            Hit::QueueRow(_) => "单击选中 · 再点一次播放",
+            Hit::SettingRow(_) => "单击选中 · 双击调整",
             Hit::SettingLeft(_) | Hit::SettingRight(_) => "点击调整",
+            Hit::ModalRow(_) => "单击选中 · 双击确认",
+            Hit::EqualizerRow(_) => "单击选中 · 双击归零",
+            Hit::EqualizerLeft(_) => "降低 1 dB",
+            Hit::EqualizerRight(_) => "提高 1 dB",
+            Hit::BrowseTab(true) => "按艺术家浏览",
+            Hit::BrowseTab(false) => "按专辑浏览",
+            Hit::ModalButton(button) => button.label(),
             Hit::ModalPanel => "窗口",
         }
     }
@@ -344,6 +427,7 @@ pub struct UiState {
     pub hits: Vec<(Hit, Rect)>,
     pub last_click: Option<(std::time::Instant, Hit)>,
     pub dragging_volume: bool,
+    pub dragging_scrollbar: bool,
 }
 
 impl UiState {
@@ -353,6 +437,16 @@ impl UiState {
             .rev()
             .find(|(_, rect)| rect.contains(x, y))
             .map(|(hit, _)| *hit)
+    }
+
+    fn double_click(&mut self, hit: Hit) -> bool {
+        let now = std::time::Instant::now();
+        let double = self
+            .last_click
+            .map(|(at, last)| last == hit && now.duration_since(at).as_millis() < 450)
+            .unwrap_or(false);
+        self.last_click = if double { None } else { Some((now, hit)) };
+        double
     }
 }
 
@@ -420,8 +514,14 @@ impl Drop for Terminal {
     }
 }
 
-pub fn handle_key(app: &mut crate::app::App, key: crossterm::event::KeyEvent) {
+pub fn handle_key(app: &mut crate::app::App, ui: &mut UiState, key: crossterm::event::KeyEvent) {
+    let modal = app.modal;
+    let lyrics_full = app.lyrics_full;
+    ui.last_click = None;
     input::handle_key(app, key);
+    if app.modal != modal || app.lyrics_full != lyrics_full {
+        ui.hover = None;
+    }
 }
 pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEvent) {
     match mouse.kind {
@@ -430,57 +530,71 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
         }
         MouseEventKind::Down(MouseButton::Left) => {
             let hit = ui.hit_at(mouse.column, mouse.row);
+            let modal = app.modal;
+            let lyrics_full = app.lyrics_full;
+            let modal_button = matches!(hit, Some(Hit::ModalButton(_)));
+            let double_clickable = matches!(
+                hit,
+                Some(
+                    Hit::Row(_)
+                        | Hit::QueueRow(_)
+                        | Hit::SettingRow(_)
+                        | Hit::ModalRow(_)
+                        | Hit::EqualizerRow(_)
+                )
+            );
             ui.hover = hit;
             if app.modal.is_some() {
                 match hit {
-                    Some(Hit::ModalPanel) => {}
-                    Some(Hit::QueueRow(index)) => {
-                        app.play_queue_index(index);
-                        app.close_modal();
-                    }
-                    Some(Hit::SettingRow(index)) => {
-                        app.setting_selected = index;
-                        if index == 0 {
-                            app.activate_setting(index);
-                        }
-                    }
-                    Some(Hit::SettingLeft(index)) => {
-                        app.setting_selected = index;
-                        app.adjust_setting(index, -1);
-                    }
-                    Some(Hit::SettingRight(index)) => {
-                        app.setting_selected = index;
-                        app.adjust_setting(index, 1);
-                    }
-                    _ => app.close_modal(),
+                    Some(hit) => handle_modal_click(app, ui, hit),
+                    None => app.close_modal(),
+                }
+                if modal_button || app.modal != modal {
+                    ui.hover = None;
+                }
+                if !double_clickable {
+                    ui.last_click = None;
                 }
                 return;
             }
             let Some(hit) = hit else {
+                ui.last_click = None;
                 return;
             };
             match hit {
                 Hit::Tab(index) => {
-                    if index == 4 {
+                    if index == 3 {
+                        app.open_modal(Modal::Folders);
+                    } else if index == 4 {
                         app.open_modal(crate::app::Modal::Browse);
                     } else {
-                        let view = ["all", "fav", "recent", "folder"][index.min(3)];
+                        let view = ["all", "fav", "recent"][index.min(2)];
                         app.set_view(view);
                     }
                 }
                 Hit::Row(index) => {
                     app.selected = index;
-                    let now = std::time::Instant::now();
-                    let double = ui
-                        .last_click
-                        .map(|(at, last)| last == hit && now.duration_since(at).as_millis() < 450)
-                        .unwrap_or(false);
-                    if double {
-                        ui.last_click = None;
+                    if ui.double_click(hit) {
                         app.play_selected();
-                    } else {
-                        ui.last_click = Some((now, hit));
                     }
+                }
+                Hit::Scrollbar => {
+                    ui.dragging_scrollbar = true;
+                    jump_scrollbar(app, ui, mouse.row);
+                }
+                Hit::ModeChip => app.cycle_mode(),
+                Hit::SpeedChip => app.reset_speed(),
+                Hit::PauseChip => app.play_or_toggle(),
+                Hit::SleepChip => app.cycle_sleep(),
+                Hit::QueueChip => app.open_modal(Modal::Queue),
+                Hit::AbChip => app.cycle_ab(),
+                Hit::EqChip => app.open_modal(Modal::Equalizer),
+                Hit::NextPreview => app.skip(true),
+                Hit::TrackInfo => app.open_modal(Modal::Info),
+                Hit::LyricsFull => app.toggle_full_lyrics(),
+                Hit::LyricsFullBack => {
+                    app.lyrics_full = false;
+                    app.notify("退出全屏歌词");
                 }
                 Hit::PlayPause => app.play_or_toggle(),
                 Hit::Prev => app.skip(false),
@@ -518,16 +632,30 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                 Hit::Time => app.toggle_remaining(),
                 _ => {}
             }
+            // 点击可能让控件消失，清掉悬停避免底部提示残留。
+            if app.modal != modal || app.lyrics_full != lyrics_full {
+                ui.hover = None;
+            }
+            if !double_clickable {
+                ui.last_click = None;
+            }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             if ui.dragging_volume {
                 set_volume_from_mouse(app, ui, mouse.column);
+            } else if ui.dragging_scrollbar {
+                jump_scrollbar(app, ui, mouse.row);
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
             ui.dragging_volume = false;
+            ui.dragging_scrollbar = false;
         }
         MouseEventKind::ScrollDown => {
+            ui.last_click = None;
+            if app.lyrics_full {
+                return;
+            }
             if ui.hover == Some(Hit::Volume) {
                 app.volume_delta(-5.0);
                 return;
@@ -571,6 +699,10 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
             }
         }
         MouseEventKind::ScrollUp => {
+            ui.last_click = None;
+            if app.lyrics_full {
+                return;
+            }
             if ui.hover == Some(Hit::Volume) {
                 app.volume_delta(5.0);
                 return;
@@ -608,6 +740,180 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
         }
         _ => {}
     }
+}
+
+fn handle_modal_click(app: &mut crate::app::App, ui: &mut UiState, hit: Hit) {
+    match hit {
+        Hit::ModalPanel => {}
+        Hit::QueueRow(index) => {
+            app.queue_selected = index;
+            if ui.double_click(hit) {
+                app.play_queue_index(index);
+                app.close_modal();
+            }
+        }
+        Hit::SettingRow(index) => {
+            app.setting_selected = index;
+            if ui.double_click(hit) {
+                app.activate_setting(index);
+            }
+        }
+        Hit::SettingLeft(index) => {
+            app.setting_selected = index;
+            app.adjust_setting(index, -1);
+        }
+        Hit::SettingRight(index) => {
+            app.setting_selected = index;
+            app.adjust_setting(index, 1);
+        }
+        Hit::ModalRow(index) => {
+            select_modal_row(app, index);
+            if ui.double_click(hit) {
+                activate_modal_row(app);
+            }
+        }
+        Hit::EqualizerRow(index) => {
+            app.eq_selected = index.min(crate::app::EQ_BANDS.len());
+            if ui.double_click(hit) {
+                app.activate_eq_row();
+            }
+        }
+        Hit::EqualizerLeft(index) => {
+            app.eq_selected = index.min(crate::app::EQ_BANDS.len());
+            app.adjust_eq(index, -1.0);
+        }
+        Hit::EqualizerRight(index) => {
+            app.eq_selected = index.min(crate::app::EQ_BANDS.len());
+            app.adjust_eq(index, 1.0);
+        }
+        Hit::BrowseTab(artist) => {
+            app.browse_artist = artist;
+            app.browse_selected = 0;
+        }
+        Hit::ModalButton(button) => handle_modal_button(app, button),
+        _ => app.close_modal(),
+    }
+}
+
+fn select_modal_row(app: &mut crate::app::App, index: usize) {
+    match app.modal {
+        Some(Modal::Folders) => {
+            app.folder_selected = index.min(app.folder_list().len().saturating_sub(1));
+        }
+        Some(Modal::Browse) => {
+            app.browse_selected = index.min(app.browse_list().len().saturating_sub(1));
+        }
+        Some(Modal::Playlists) => {
+            app.playlist_selected = index.min(app.playlists.len().saturating_sub(1));
+        }
+        Some(Modal::PlaylistTracks) => {
+            let count = app
+                .playlists
+                .get(app.playlist_selected)
+                .map(|list| list.songs.len())
+                .unwrap_or(0);
+            app.playlist_song_selected = index.min(count.saturating_sub(1));
+        }
+        Some(Modal::AudioDevice) => {
+            app.device_selected = index.min(app.devices.len().saturating_sub(1));
+        }
+        Some(Modal::Keybindings) => {
+            app.keybind_selected = index.min(crate::keymap::ACTIONS.len().saturating_sub(1));
+        }
+        _ => {}
+    }
+}
+
+fn activate_modal_row(app: &mut crate::app::App) {
+    match app.modal {
+        Some(Modal::Folders) => app.select_folder(),
+        Some(Modal::Browse) => app.select_browse(),
+        Some(Modal::Playlists) => app.open_playlist_tracks(),
+        Some(Modal::PlaylistTracks) => app.play_playlist(app.playlist_song_selected),
+        Some(Modal::AudioDevice) => app.apply_device(),
+        Some(Modal::Keybindings) => app.begin_capture_binding(),
+        Some(Modal::Equalizer) => app.activate_eq_row(),
+        Some(Modal::Queue) => app.play_queue_index(app.queue_selected),
+        Some(Modal::Settings) => app.activate_setting(app.setting_selected),
+        _ => {}
+    }
+}
+
+fn handle_modal_button(app: &mut crate::app::App, button: ModalButton) {
+    let Some(modal) = app.modal else {
+        return;
+    };
+    match button {
+        ModalButton::Close => app.close_modal(),
+        ModalButton::Confirm => app.submit_modal(),
+        ModalButton::Cancel => app.cancel_modal(),
+        ModalButton::New => app.begin_playlist_create(),
+        ModalButton::Rename => app.begin_playlist_rename(),
+        ModalButton::Delete => app.delete_playlist(),
+        ModalButton::Add => app.add_to_playlist(),
+        ModalButton::Play => {
+            if modal == Modal::PlaylistTracks {
+                app.play_playlist(app.playlist_song_selected);
+            }
+        }
+        ModalButton::Reset => match modal {
+            Modal::Equalizer => app.reset_eq(),
+            Modal::Keybindings => {
+                if let Some(action) = crate::keymap::ACTIONS.get(app.keybind_selected) {
+                    app.reset_binding(*action);
+                }
+            }
+            _ => {}
+        },
+        ModalButton::Clear => match modal {
+            Modal::Stats => app.clear_stats(),
+            Modal::Queue => app.queue_clear(),
+            _ => {}
+        },
+        ModalButton::Apply => {
+            if modal == Modal::AudioDevice {
+                app.apply_device();
+            }
+        }
+        ModalButton::Refresh => {
+            if modal == Modal::AudioDevice {
+                app.open_modal(Modal::AudioDevice);
+            }
+        }
+        ModalButton::Capture => app.begin_capture_binding(),
+        ModalButton::MoveUp => {
+            if modal == Modal::Queue {
+                app.queue_move(-1);
+            }
+        }
+        ModalButton::MoveDown => {
+            if modal == Modal::Queue {
+                app.queue_move(1);
+            }
+        }
+        ModalButton::Remove => match modal {
+            Modal::Queue => app.queue_remove(),
+            Modal::PlaylistTracks => app.remove_playlist_song(),
+            _ => {}
+        },
+        ModalButton::Open => activate_modal_row(app),
+    }
+}
+
+fn jump_scrollbar(app: &mut crate::app::App, ui: &UiState, row: u16) {
+    let Some((_, rect)) = ui.hits.iter().rev().find(|(hit, _)| *hit == Hit::Scrollbar) else {
+        return;
+    };
+    if rect.height == 0 {
+        return;
+    }
+    let total = app.visible.len();
+    let rows = rect.height;
+    let max_offset = total.saturating_sub(rows);
+    let fraction =
+        ((row as usize).saturating_sub(rect.y) as f64 / rect.height as f64).clamp(0.0, 1.0);
+    let top = (fraction * max_offset as f64).round() as usize;
+    app.selected = (top + rows / 2).min(total.saturating_sub(1));
 }
 
 fn set_volume_from_mouse(app: &mut crate::app::App, ui: &UiState, column: u16) {

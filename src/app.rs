@@ -588,6 +588,24 @@ impl App {
         self.mpv.state.path.clone()
     }
 
+    pub(crate) fn next_track(&self) -> Option<&Track> {
+        let position = self.mpv.state.playlist_pos?;
+        if position < 0 {
+            return None;
+        }
+        let count = self.session.len();
+        if count == 0 {
+            return None;
+        }
+        let position = position as usize;
+        let index = match self.mode.as_str() {
+            "single" => position,
+            "loop" | "shuffle" => (position + 1) % count,
+            _ => position + 1,
+        };
+        self.session.get(index)
+    }
+
     pub(crate) fn selected_track(&self) -> Option<&Track> {
         self.visible
             .get(self.selected)

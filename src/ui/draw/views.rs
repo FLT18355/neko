@@ -3,7 +3,12 @@ use crate::app::{App, Modal};
 use crate::keymap::ACTIONS;
 use crate::library;
 
-pub fn draw_full_lyrics(canvas: &mut Canvas, app: &App) {
+pub fn draw_full_lyrics(
+    canvas: &mut Canvas,
+    app: &App,
+    hover: Option<Hit>,
+    hits: &mut Vec<(Hit, Rect)>,
+) {
     let width = canvas.width();
     let height = canvas.height();
     canvas.fill(0, 0, width, height, Style::new(txt(), base()));
@@ -14,11 +19,22 @@ pub fn draw_full_lyrics(canvas: &mut Canvas, app: &App) {
             "没有正在播放的曲目喵",
             Style::new(overlay0(), base()),
         );
+        let back = "F 或 Esc 返回";
         canvas.centered(
             height.saturating_sub(2),
-            "F 或 Esc 返回",
+            back,
             Style::new(surface2(), base()),
         );
+        let back_width = text_width(back);
+        hits.push((
+            Hit::LyricsFullBack,
+            Rect::new(
+                (width.saturating_sub(back_width)) / 2,
+                height.saturating_sub(2),
+                back_width,
+                1,
+            ),
+        ));
         return;
     };
     let title = state
@@ -110,28 +126,47 @@ pub fn draw_full_lyrics(canvas: &mut Canvas, app: &App) {
         };
         canvas.put(bar_x + column, bar_y, ch, Style::new(color, base()));
     }
+    hits.push((Hit::Progress, Rect::new(bar_x, bar_y, bar_width.max(1), 1)));
+    let time_label = if app.remaining {
+        format!("-{}", library::duration_text((duration - time).max(0.0)))
+    } else {
+        library::duration_text(time)
+    };
+    let clock = format!("{time_label} / {}", library::duration_text(duration));
     canvas.put(
         bar_x,
         height.saturating_sub(2),
-        &format!(
-            "{} / {}",
-            library::duration_text(time),
-            library::duration_text(duration)
-        ),
+        &clock,
         Style::new(sub0(), base()),
     );
+    hits.push((
+        Hit::Time,
+        Rect::new(bar_x, height.saturating_sub(2), text_width(&clock), 1),
+    ));
     let hint = if state.pause {
         "已暂停 · 空格继续 · F / Esc 返回"
     } else {
         "空格暂停 · n / p 切歌 · F / Esc 返回"
     };
     let hint_width = text_width(hint);
+    let hint_x = width.saturating_sub(hint_width + 2);
     canvas.put(
-        width.saturating_sub(hint_width + 2),
+        hint_x,
         height.saturating_sub(2),
         hint,
-        Style::new(surface2(), base()),
+        Style::new(
+            if hover == Some(Hit::LyricsFullBack) {
+                pink()
+            } else {
+                surface2()
+            },
+            base(),
+        ),
     );
+    hits.push((
+        Hit::LyricsFullBack,
+        Rect::new(hint_x, height.saturating_sub(2), hint_width, 1),
+    ));
 }
 
 pub fn draw_modal(
@@ -142,15 +177,16 @@ pub fn draw_modal(
     hits: &mut Vec<(Hit, Rect)>,
 ) {
     match modal {
-        Modal::Help => draw_help(canvas, app, hits),
+        Modal::Help => draw_help(canvas, app, hover, hits),
         Modal::Queue => draw_queue(canvas, app, hover, hits),
-        Modal::Info => draw_info(canvas, app, hits),
+        Modal::Info => draw_info(canvas, app, hover, hits),
         Modal::Search => draw_input(
             canvas,
             app,
             "搜索曲目",
             "关键词",
             "Enter 应用 · Esc 取消",
+            hover,
             hits,
         ),
         Modal::Directory => draw_input(
@@ -159,6 +195,7 @@ pub fn draw_modal(
             "默认音乐目录",
             "目录路径（Ctrl+U 清空）",
             "Enter 设为默认目录 · Esc 取消",
+            hover,
             hits,
         ),
         Modal::Seek => draw_input(
@@ -167,13 +204,14 @@ pub fn draw_modal(
             "跳转时间",
             "秒 / 分:秒 / ±秒",
             "Enter 跳转 · 例 1:23 或 -15 · Esc 取消",
+            hover,
             hits,
         ),
         Modal::Settings => draw_settings(canvas, app, hover, hits),
-        Modal::Folders => draw_folders(canvas, app, hits),
-        Modal::Browse => draw_browse(canvas, app, hits),
-        Modal::Playlists => draw_playlists(canvas, app, hits),
-        Modal::PlaylistTracks => draw_playlist_tracks(canvas, app, hits),
+        Modal::Folders => draw_folders(canvas, app, hover, hits),
+        Modal::Browse => draw_browse(canvas, app, hover, hits),
+        Modal::Playlists => draw_playlists(canvas, app, hover, hits),
+        Modal::PlaylistTracks => draw_playlist_tracks(canvas, app, hover, hits),
         Modal::PlaylistName => draw_input(
             canvas,
             app,
@@ -184,12 +222,13 @@ pub fn draw_modal(
             },
             "歌单名",
             "Enter 保存 · Esc 取消",
+            hover,
             hits,
         ),
-        Modal::Equalizer => draw_equalizer(canvas, app, hits),
-        Modal::AudioDevice => draw_devices(canvas, app, hits),
-        Modal::Stats => draw_stats(canvas, app, hits),
-        Modal::Keybindings => draw_keybindings(canvas, app, hits),
+        Modal::Equalizer => draw_equalizer(canvas, app, hover, hits),
+        Modal::AudioDevice => draw_devices(canvas, app, hover, hits),
+        Modal::Stats => draw_stats(canvas, app, hover, hits),
+        Modal::Keybindings => draw_keybindings(canvas, app, hover, hits),
     }
 }
 
@@ -219,7 +258,37 @@ fn frame(
     (x, y, width, height)
 }
 
-fn draw_help(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
+fn modal_button(
+    canvas: &mut Canvas,
+    x: usize,
+    y: usize,
+    limit: usize,
+    button: ModalButton,
+    hover: Option<Hit>,
+    hits: &mut Vec<(Hit, Rect)>,
+) -> usize {
+    let text = format!(" {} ", button.label());
+    let width = text_width(&text);
+    if x + width > limit {
+        return x;
+    }
+    let hit = Hit::ModalButton(button);
+    let active = hover == Some(hit);
+    canvas.put(
+        x,
+        y,
+        &text,
+        if active {
+            Style::new(pink(), surface1()).bold()
+        } else {
+            Style::new(sub1(), surface0())
+        },
+    );
+    hits.push((hit, Rect::new(x, y, width, 1)));
+    x + width + 1
+}
+
+fn draw_help(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
     let mut entries: Vec<(String, String)> = crate::keymap::ACTIONS
         .iter()
         .map(|action| (app.key_for(*action), action.label().to_string()))
@@ -271,8 +340,17 @@ fn draw_help(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
     canvas.put(
         x + 2,
         y + height - 2,
-        "j/k 滚动 · Esc 或 q 关闭",
+        "j/k 滚动",
         Style::new(overlay0(), mantle()),
+    );
+    let _ = modal_button(
+        canvas,
+        x + width.saturating_sub(12),
+        y + height - 2,
+        x + width - 2,
+        ModalButton::Close,
+        hover,
+        hits,
     );
 }
 
@@ -280,7 +358,7 @@ fn draw_queue(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
     let width = 72;
     let height = canvas.height().saturating_sub(4).clamp(8, 24);
     let (x, y, width, height) = frame(canvas, width, height, "播放队列", hits);
-    let rows = height.saturating_sub(3);
+    let rows = height.saturating_sub(4);
     if app.session.is_empty() {
         canvas.put(
             x + 2,
@@ -288,63 +366,104 @@ fn draw_queue(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
             "队列是空的喵，先挑一首播放",
             Style::new(overlay0(), mantle()),
         );
-        return;
-    }
-    let offset = app
-        .queue_selected
-        .saturating_sub(rows / 2)
-        .min(app.session.len().saturating_sub(rows));
-    let current = app.current_path();
-    for (row, track) in app.session.iter().skip(offset).take(rows).enumerate() {
-        let index = offset + row;
-        let playing = current.as_ref() == Some(&track.path);
-        let row_hover = hover == Some(Hit::QueueRow(index));
-        let selected = index == app.queue_selected;
-        let style = if selected || row_hover {
-            Style::new(selected_fg(), surface0()).bold()
-        } else if playing {
-            Style::new(pink(), mantle()).bold()
-        } else {
-            Style::new(txt(), mantle())
-        };
-        if selected || row_hover {
-            canvas.fill(
-                x + 1,
+    } else {
+        let offset = app
+            .queue_selected
+            .saturating_sub(rows / 2)
+            .min(app.session.len().saturating_sub(rows));
+        let current = app.current_path();
+        for (row, track) in app.session.iter().skip(offset).take(rows).enumerate() {
+            let index = offset + row;
+            let playing = current.as_ref() == Some(&track.path);
+            let row_hover = hover == Some(Hit::QueueRow(index));
+            let selected = index == app.queue_selected;
+            let style = if selected || row_hover {
+                Style::new(selected_fg(), surface0()).bold()
+            } else if playing {
+                Style::new(pink(), mantle()).bold()
+            } else {
+                Style::new(txt(), mantle())
+            };
+            if selected || row_hover {
+                canvas.fill(
+                    x + 1,
+                    y + 2 + row,
+                    width - 2,
+                    1,
+                    Style::new(txt(), surface0()),
+                );
+            }
+            let marker = if playing { NOTE } else { " " };
+            canvas.put(
+                x + 2,
                 y + 2 + row,
-                width - 2,
-                1,
-                Style::new(txt(), surface0()),
+                &format!(
+                    "{:>3}  {} {}",
+                    index + 1,
+                    marker,
+                    truncate(&track.title, width - 12)
+                ),
+                style,
             );
+            hits.push((
+                Hit::QueueRow(index),
+                Rect::new(x + 1, y + 2 + row, width - 2, 1),
+            ));
         }
-        let marker = if playing { NOTE } else { " " };
-        canvas.put(
-            x + 2,
-            y + 2 + row,
-            &format!(
-                "{:>3}  {} {}",
-                index + 1,
-                marker,
-                truncate(&track.title, width - 12)
-            ),
-            style,
-        );
-        hits.push((
-            Hit::QueueRow(index),
-            Rect::new(x + 1, y + 2 + row, width - 2, 1),
-        ));
     }
-    canvas.put(
-        x + 2,
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    button_x = modal_button(
+        canvas,
+        button_x,
         y + height - 2,
-        "Enter 播放 · J/K 移动 · d 移出 · x 清空 · Esc 关闭",
-        Style::new(overlay0(), mantle()),
+        limit,
+        ModalButton::MoveUp,
+        hover,
+        hits,
+    );
+    button_x = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::MoveDown,
+        hover,
+        hits,
+    );
+    button_x = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Remove,
+        hover,
+        hits,
+    );
+    button_x = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Clear,
+        hover,
+        hits,
+    );
+    let _ = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Close,
+        hover,
+        hits,
     );
 }
 
-fn draw_info(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
+fn draw_info(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
     let width = 78;
     let height = 16;
-    let (x, y, width, _height) = frame(canvas, width, height, "曲目详情", hits);
+    let (x, y, width, height) = frame(canvas, width, height, "曲目详情", hits);
     let state = &app.mpv.state;
     let Some(path) = state.path.as_ref() else {
         canvas.put(
@@ -352,6 +471,15 @@ fn draw_info(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
             y + 2,
             "没有正在播放的曲目喵",
             Style::new(overlay0(), mantle()),
+        );
+        let _ = modal_button(
+            canvas,
+            x + 2,
+            y + height - 2,
+            x + width - 2,
+            ModalButton::Close,
+            hover,
+            hits,
         );
         return;
     };
@@ -421,7 +549,7 @@ fn draw_info(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
         lines.push(format!("队列    {}/{}", position + 1, count));
     }
     for (row, line) in lines.iter().enumerate() {
-        if row >= _height.saturating_sub(4) {
+        if row >= height.saturating_sub(4) {
             break;
         }
         canvas.put(
@@ -431,11 +559,14 @@ fn draw_info(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
             Style::new(sub1(), mantle()),
         );
     }
-    canvas.put(
+    let _ = modal_button(
+        canvas,
         x + 2,
-        y + _height - 2,
-        "Esc 关闭",
-        Style::new(overlay0(), mantle()),
+        y + height - 2,
+        x + width - 2,
+        ModalButton::Close,
+        hover,
+        hits,
     );
 }
 
@@ -445,11 +576,12 @@ fn draw_input(
     title: &str,
     label: &str,
     hint: &str,
+    hover: Option<Hit>,
     hits: &mut Vec<(Hit, Rect)>,
 ) {
     let width = 70;
-    let height = 8;
-    let (x, y, width, _height) = frame(canvas, width, height, title, hits);
+    let height = 9;
+    let (x, y, width, height) = frame(canvas, width, height, title, hits);
     canvas.put(x + 2, y + 2, label, Style::new(overlay0(), mantle()));
     canvas.fill(
         x + 2,
@@ -466,14 +598,41 @@ fn draw_input(
     };
     let input_x = canvas.put(x + 2, y + 3, &text, Style::new(txt(), surface0()));
     canvas.put(input_x, y + 3, "▌", Style::new(pink(), surface0()).bold());
-    canvas.put(x + 2, y + 5, hint, Style::new(overlay0(), mantle()));
+    if height >= 9 {
+        canvas.put(
+            x + 2,
+            y + 5,
+            &truncate(hint, width.saturating_sub(4)),
+            Style::new(overlay0(), mantle()),
+        );
+    }
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    button_x = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Confirm,
+        hover,
+        hits,
+    );
+    let _ = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Cancel,
+        hover,
+        hits,
+    );
 }
 
-fn draw_playlists(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
+fn draw_playlists(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
     let width = 72;
     let height = canvas.height().saturating_sub(4).clamp(8, 24);
     let (x, y, width, height) = frame(canvas, width, height, "自建歌单", hits);
-    let rows = height.saturating_sub(3);
+    let rows = height.saturating_sub(4);
     if app.playlists.is_empty() {
         canvas.put(
             x + 2,
@@ -489,8 +648,9 @@ fn draw_playlists(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
         for (row, list) in app.playlists.iter().skip(offset).take(rows).enumerate() {
             let index = offset + row;
             let selected = index == app.playlist_selected;
+            let row_hover = hover == Some(Hit::ModalRow(index));
             let row_y = y + 2 + row;
-            if selected {
+            if selected || row_hover {
                 canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), surface0()));
             }
             canvas.put(
@@ -501,7 +661,7 @@ fn draw_playlists(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
                     index + 1,
                     truncate(&list.name, width.saturating_sub(24))
                 ),
-                if selected {
+                if selected || row_hover {
                     Style::new(pink(), surface0()).bold()
                 } else {
                     Style::new(txt(), mantle())
@@ -513,17 +673,36 @@ fn draw_playlists(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
                 &format!("{} 首", list.songs.len()),
                 Style::new(overlay0(), if selected { surface0() } else { mantle() }),
             );
+            hits.push((Hit::ModalRow(index), Rect::new(x + 1, row_y, width - 2, 1)));
         }
     }
-    canvas.put(
-        x + 2,
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    for button in [
+        ModalButton::New,
+        ModalButton::Rename,
+        ModalButton::Delete,
+        ModalButton::Add,
+    ] {
+        button_x = modal_button(canvas, button_x, y + height - 2, limit, button, hover, hits);
+    }
+    let _ = modal_button(
+        canvas,
+        button_x,
         y + height - 2,
-        "Enter 打开 · n 新建 · r 改名 · x 删除 · a 加入当前曲目",
-        Style::new(overlay0(), mantle()),
+        limit,
+        ModalButton::Close,
+        hover,
+        hits,
     );
 }
 
-fn draw_playlist_tracks(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
+fn draw_playlist_tracks(
+    canvas: &mut Canvas,
+    app: &App,
+    hover: Option<Hit>,
+    hits: &mut Vec<(Hit, Rect)>,
+) {
     let width: usize = 72;
     let height = canvas.height().saturating_sub(4).clamp(8, 24);
     let Some(list) = app.playlists.get(app.playlist_selected) else {
@@ -531,7 +710,7 @@ fn draw_playlist_tracks(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rec
     };
     let title = format!("歌单 · {}", truncate(&list.name, width.saturating_sub(16)));
     let (x, y, width, height) = frame(canvas, width, height, &title, hits);
-    let rows = height.saturating_sub(3);
+    let rows = height.saturating_sub(4);
     if list.songs.is_empty() {
         canvas.put(
             x + 2,
@@ -548,8 +727,9 @@ fn draw_playlist_tracks(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rec
         for (row, song) in list.songs.iter().skip(offset).take(rows).enumerate() {
             let index = offset + row;
             let selected = index == app.playlist_song_selected;
+            let row_hover = hover == Some(Hit::ModalRow(index));
             let row_y = y + 2 + row;
-            if selected {
+            if selected || row_hover {
                 canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), surface0()));
             }
             let playing = current
@@ -564,27 +744,36 @@ fn draw_playlist_tracks(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rec
                     index + 1,
                     truncate(&app.title_for(song), width.saturating_sub(12))
                 ),
-                if selected {
+                if selected || row_hover {
                     Style::new(pink(), surface0()).bold()
                 } else {
                     Style::new(txt(), mantle())
                 },
             );
+            hits.push((Hit::ModalRow(index), Rect::new(x + 1, row_y, width - 2, 1)));
         }
     }
-    canvas.put(
-        x + 2,
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    for button in [ModalButton::Play, ModalButton::Add, ModalButton::Remove] {
+        button_x = modal_button(canvas, button_x, y + height - 2, limit, button, hover, hits);
+    }
+    let _ = modal_button(
+        canvas,
+        button_x,
         y + height - 2,
-        "Enter 播放 · a 加入当前曲目 · d 移出 · Esc 返回",
-        Style::new(overlay0(), mantle()),
+        limit,
+        ModalButton::Close,
+        hover,
+        hits,
     );
 }
 
-fn draw_folders(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
+fn draw_folders(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
     let width = 72;
     let height = canvas.height().saturating_sub(4).clamp(8, 24);
     let (x, y, width, height) = frame(canvas, width, height, "文件夹", hits);
-    let rows = height.saturating_sub(3);
+    let rows = height.saturating_sub(4);
     let folders = app.folder_list();
     if folders.is_empty() {
         canvas.put(
@@ -601,8 +790,9 @@ fn draw_folders(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
         for (row, (name, count)) in folders.iter().skip(offset).take(rows).enumerate() {
             let index = offset + row;
             let selected = index == app.folder_selected;
+            let row_hover = hover == Some(Hit::ModalRow(index));
             let row_y = y + 2 + row;
-            if selected {
+            if selected || row_hover {
                 canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), surface0()));
             }
             let label = if name.is_empty() { "根目录" } else { name };
@@ -614,7 +804,7 @@ fn draw_folders(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
                     index + 1,
                     truncate(label, width.saturating_sub(24))
                 ),
-                if selected {
+                if selected || row_hover {
                     Style::new(pink(), surface0()).bold()
                 } else {
                     Style::new(txt(), mantle())
@@ -626,17 +816,32 @@ fn draw_folders(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
                 &format!("{count} 首"),
                 Style::new(overlay0(), if selected { surface0() } else { mantle() }),
             );
+            hits.push((Hit::ModalRow(index), Rect::new(x + 1, row_y, width - 2, 1)));
         }
     }
-    canvas.put(
-        x + 2,
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    button_x = modal_button(
+        canvas,
+        button_x,
         y + height - 2,
-        "Enter 进入文件夹 · Esc 关闭",
-        Style::new(overlay0(), mantle()),
+        limit,
+        ModalButton::Open,
+        hover,
+        hits,
+    );
+    let _ = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Close,
+        hover,
+        hits,
     );
 }
 
-fn draw_browse(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
+fn draw_browse(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
     let width = 72;
     let height = canvas.height().saturating_sub(4).clamp(8, 24);
     let (x, y, width, height) = frame(canvas, width, height, "分类浏览", hits);
@@ -653,22 +858,26 @@ fn draw_browse(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
         Style::new(overlay0(), mantle()),
     );
     let mut tab_x = x + width.saturating_sub(17);
-    for (label, active) in [("专辑", !app.browse_artist), ("艺术家", app.browse_artist)] {
+    for (label, artist) in [("专辑", false), ("艺术家", true)] {
+        let active = app.browse_artist == artist;
+        let hit = Hit::BrowseTab(artist);
+        let hovered = hover == Some(hit);
         let text = format!(" {label} ");
         let tab_width = text_width(&text);
-        if active {
+        if active || hovered {
             canvas.fill(tab_x, y + 2, tab_width, 1, Style::new(pink(), surface0()));
         }
         canvas.put(
             tab_x,
             y + 2,
             &text,
-            if active {
+            if active || hovered {
                 Style::new(pink(), surface0()).bold()
             } else {
                 Style::new(overlay0(), mantle())
             },
         );
+        hits.push((hit, Rect::new(tab_x, y + 2, tab_width, 1)));
         tab_x += tab_width + 1;
     }
     let rows = height.saturating_sub(6);
@@ -687,8 +896,9 @@ fn draw_browse(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
         for (row, (_, label, count)) in groups.iter().skip(offset).take(rows).enumerate() {
             let index = offset + row;
             let selected = index == app.browse_selected;
+            let row_hover = hover == Some(Hit::ModalRow(index));
             let row_y = y + 4 + row;
-            if selected {
+            if selected || row_hover {
                 canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), surface0()));
             }
             canvas.put(
@@ -699,7 +909,7 @@ fn draw_browse(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
                     index + 1,
                     truncate(label, width.saturating_sub(24))
                 ),
-                if selected {
+                if selected || row_hover {
                     Style::new(pink(), surface0()).bold()
                 } else {
                     Style::new(txt(), mantle())
@@ -711,17 +921,32 @@ fn draw_browse(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
                 &format!("{count} 首"),
                 Style::new(overlay0(), if selected { surface0() } else { mantle() }),
             );
+            hits.push((Hit::ModalRow(index), Rect::new(x + 1, row_y, width - 2, 1)));
         }
     }
-    canvas.put(
-        x + 2,
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    button_x = modal_button(
+        canvas,
+        button_x,
         y + height - 2,
-        "Tab 切换专辑 / 艺术家 · Enter 浏览 · Esc 关闭",
-        Style::new(overlay0(), mantle()),
+        limit,
+        ModalButton::Open,
+        hover,
+        hits,
+    );
+    let _ = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Close,
+        hover,
+        hits,
     );
 }
 
-fn draw_equalizer(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
+fn draw_equalizer(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
     let width = 66;
     let height = app.cfg.eq_gains.len() + 6;
     let (x, y, width, height) = frame(canvas, width, height, "10 段均衡器", hits);
@@ -734,10 +959,21 @@ fn draw_equalizer(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
             break;
         }
         let selected = row == app.eq_selected;
-        let background = if selected { surface0() } else { mantle() };
-        if selected {
+        let row_hover = hover == Some(Hit::EqualizerRow(row));
+        let background = if selected {
+            surface1()
+        } else if row_hover {
+            mix(mantle(), surface0(), 0.55)
+        } else {
+            mantle()
+        };
+        if selected || row_hover {
             canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), background));
         }
+        hits.push((
+            Hit::EqualizerRow(row),
+            Rect::new(x + 1, row_y, width - 2, 1),
+        ));
         let (label, gain) = if row == 0 {
             ("总开关".to_string(), None)
         } else {
@@ -773,11 +1009,35 @@ fn draw_equalizer(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
                     canvas.put(bar_x + column, row_y, ch, Style::new(color, background));
                 }
                 canvas.put(
-                    x + width - 11,
+                    x + width - 19,
                     row_y,
                     &format!("{gain:+5.0} dB"),
                     Style::new(txt(), background),
                 );
+                let left_hit = Hit::EqualizerLeft(row);
+                let right_hit = Hit::EqualizerRight(row);
+                canvas.put(
+                    x + width - 9,
+                    row_y,
+                    "‹",
+                    if hover == Some(left_hit) {
+                        Style::new(pink(), surface0()).bold()
+                    } else {
+                        Style::new(overlay0(), background)
+                    },
+                );
+                canvas.put(
+                    x + width - 6,
+                    row_y,
+                    "›",
+                    if hover == Some(right_hit) {
+                        Style::new(pink(), surface0()).bold()
+                    } else {
+                        Style::new(overlay0(), background)
+                    },
+                );
+                hits.push((left_hit, Rect::new(x + width - 9, row_y, 1, 1)));
+                hits.push((right_hit, Rect::new(x + width - 6, row_y, 1, 1)));
             }
             None => {
                 canvas.put(
@@ -789,19 +1049,33 @@ fn draw_equalizer(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
             }
         }
     }
-    canvas.put(
-        x + 2,
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    button_x = modal_button(
+        canvas,
+        button_x,
         y + height - 2,
-        "↑/↓ 选择 · ←/→ 调 ±1dB · Enter 归零/开关 · r 拉平",
-        Style::new(overlay0(), mantle()),
+        limit,
+        ModalButton::Reset,
+        hover,
+        hits,
+    );
+    let _ = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Close,
+        hover,
+        hits,
     );
 }
 
-fn draw_devices(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
+fn draw_devices(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
     let width = 72;
     let height = canvas.height().saturating_sub(4).clamp(8, 24);
     let (x, y, width, height) = frame(canvas, width, height, "音频输出设备", hits);
-    let rows = height.saturating_sub(3);
+    let rows = height.saturating_sub(4);
     if app.devices.is_empty() {
         canvas.put(
             x + 2,
@@ -817,8 +1091,9 @@ fn draw_devices(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
         for (row, (name, description)) in app.devices.iter().skip(offset).take(rows).enumerate() {
             let index = offset + row;
             let selected = index == app.device_selected;
+            let row_hover = hover == Some(Hit::ModalRow(index));
             let row_y = y + 2 + row;
-            if selected {
+            if selected || row_hover {
                 canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), surface0()));
             }
             let current = *name == app.cfg.audio_device;
@@ -832,7 +1107,7 @@ fn draw_devices(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
                 x + 4,
                 row_y,
                 &truncate(description, width.saturating_sub(20)),
-                if selected {
+                if selected || row_hover {
                     Style::new(pink(), surface0()).bold()
                 } else {
                     Style::new(txt(), mantle())
@@ -844,17 +1119,41 @@ fn draw_devices(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
                 &truncate(name, 12),
                 Style::new(overlay0(), if selected { surface0() } else { mantle() }),
             );
+            hits.push((Hit::ModalRow(index), Rect::new(x + 1, row_y, width - 2, 1)));
         }
     }
-    canvas.put(
-        x + 2,
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    button_x = modal_button(
+        canvas,
+        button_x,
         y + height - 2,
-        "Enter 应用 · r 重新读取 · Esc 关闭",
-        Style::new(overlay0(), mantle()),
+        limit,
+        ModalButton::Apply,
+        hover,
+        hits,
+    );
+    button_x = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Refresh,
+        hover,
+        hits,
+    );
+    let _ = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Close,
+        hover,
+        hits,
     );
 }
 
-fn draw_stats(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
+fn draw_stats(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
     let width = 76;
     let height = canvas.height().saturating_sub(4).clamp(12, 24);
     let (x, y, width, height) = frame(canvas, width, height, "收听统计", hits);
@@ -905,15 +1204,34 @@ fn draw_stats(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
             );
         }
     }
-    canvas.put(
-        x + 2,
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    button_x = modal_button(
+        canvas,
+        button_x,
         y + height - 2,
-        "j/k 滚动 · x 清空统计 · Esc 关闭",
-        Style::new(overlay0(), mantle()),
+        limit,
+        ModalButton::Clear,
+        hover,
+        hits,
+    );
+    let _ = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Close,
+        hover,
+        hits,
     );
 }
 
-fn draw_keybindings(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
+fn draw_keybindings(
+    canvas: &mut Canvas,
+    app: &App,
+    hover: Option<Hit>,
+    hits: &mut Vec<(Hit, Rect)>,
+) {
     let width = 78;
     let height = canvas.height().saturating_sub(4).clamp(10, 28);
     let (x, y, width, height) = frame(canvas, width, height, "自定义快捷键", hits);
@@ -929,15 +1247,22 @@ fn draw_keybindings(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>)
         };
         let row_y = y + 2 + row;
         let selected = index == app.keybind_selected;
-        let background = if selected { surface0() } else { mantle() };
-        if selected {
+        let row_hover = hover == Some(Hit::ModalRow(index));
+        let background = if selected {
+            surface1()
+        } else if row_hover {
+            mix(mantle(), surface0(), 0.55)
+        } else {
+            mantle()
+        };
+        if selected || row_hover {
             canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), background));
         }
         canvas.put(
             x + 2,
             row_y,
             &truncate(action.label(), width.saturating_sub(26)),
-            if selected {
+            if selected || row_hover {
                 Style::new(pink(), background).bold()
             } else {
                 Style::new(sub1(), background)
@@ -954,16 +1279,36 @@ fn draw_keybindings(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>)
             &key,
             Style::new(lavender(), background).bold(),
         );
+        hits.push((Hit::ModalRow(index), Rect::new(x + 1, row_y, width - 2, 1)));
     }
-    canvas.put(
-        x + 2,
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    button_x = modal_button(
+        canvas,
+        button_x,
         y + height - 2,
-        if app.capture_key {
-            "按下新按键 · Esc 取消"
-        } else {
-            "Enter 改键 · r 恢复默认 · Esc 关闭"
-        },
-        Style::new(overlay0(), mantle()),
+        limit,
+        ModalButton::Capture,
+        hover,
+        hits,
+    );
+    button_x = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Reset,
+        hover,
+        hits,
+    );
+    let _ = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Close,
+        hover,
+        hits,
     );
 }
 
@@ -1046,8 +1391,17 @@ fn draw_settings(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut 
     canvas.put(
         x + 2,
         y + height - 2,
-        "↑/↓ 选择 · ←/→ 调整 · Enter 修改 · Esc 关闭",
+        "↑/↓ 选择 · ←/→ 调整 · 双击修改",
         Style::new(overlay0(), mantle()),
+    );
+    let _ = modal_button(
+        canvas,
+        x + width.saturating_sub(12),
+        y + height - 2,
+        x + width - 2,
+        ModalButton::Close,
+        hover,
+        hits,
     );
 }
 
