@@ -91,6 +91,7 @@ impl App {
             Action::ViewFav => self.set_view("fav"),
             Action::ViewRecent => self.set_view("recent"),
             Action::ViewFolder => self.open_modal(Modal::Folders),
+            Action::Browse => self.open_modal(Modal::Browse),
             Action::CycleView => self.cycle_view(),
             Action::Search => self.open_modal(Modal::Search),
             Action::Directory => self.open_modal(Modal::Directory),
@@ -147,7 +148,7 @@ impl App {
             self.notify(format!("写播放列表失败：{err}"));
             return;
         }
-        if let Err(err) = self.mpv.load_m3u(&list, position, &self.mode) {
+        if let Err(err) = self.mpv.load_m3u(&list, position, &self.mode, false) {
             self.notify(format!("mpv 播放失败：{err}"));
             return;
         }
@@ -588,6 +589,15 @@ impl App {
                     .unwrap_or(0);
                 self.input.clear();
             }
+            Modal::Browse => {
+                self.browse_artist = self.view == "artist";
+                let groups = self.browse_list();
+                self.browse_selected = groups
+                    .iter()
+                    .position(|(key, _, _)| *key == self.group)
+                    .unwrap_or(0);
+                self.input.clear();
+            }
             Modal::Equalizer => {
                 self.eq_selected = 0;
                 self.input.clear();
@@ -870,6 +880,52 @@ impl App {
                 self.folder.clone()
             }
         ));
+        self.close_modal();
+    }
+
+    pub(crate) fn browse_list(&self) -> Vec<(String, String, usize)> {
+        let root = std::path::Path::new(&self.cfg.music_dir);
+        if self.browse_artist {
+            library::artist_groups(&self.tracks, root)
+        } else {
+            library::album_groups(&self.tracks, root)
+        }
+    }
+
+    pub(crate) fn browse_move(&mut self, delta: isize) {
+        let count = self.browse_list().len();
+        if count == 0 {
+            return;
+        }
+        self.browse_selected = (self.browse_selected as isize + delta)
+            .clamp(0, count.saturating_sub(1) as isize) as usize;
+    }
+
+    pub(crate) fn toggle_browse_kind(&mut self) {
+        self.browse_artist = !self.browse_artist;
+        self.browse_selected = 0;
+    }
+
+    pub(crate) fn select_browse(&mut self) {
+        let groups = self.browse_list();
+        let Some((key, label)) = groups
+            .get(self.browse_selected)
+            .map(|(key, label, _)| (key.clone(), label.clone()))
+        else {
+            self.notify("没有可浏览的分类喵");
+            return;
+        };
+        self.group = key;
+        self.view = if self.browse_artist {
+            "artist"
+        } else {
+            "album"
+        }
+        .into();
+        self.selected = 0;
+        self.rebuild_visible();
+        let count = self.visible.len();
+        self.notify(format!("{label} · {count} 首"));
         self.close_modal();
     }
 

@@ -14,6 +14,9 @@ pub struct Cache {
     pub filter: String,
     pub folder: String,
     pub selected_path: Option<String>,
+    pub group: String,
+    pub queue: Vec<String>,
+    pub queue_pos: usize,
     pub plays: HashMap<String, u64>,
     pub ratings: HashMap<String, u8>,
     pub positions: HashMap<String, f64>,
@@ -88,5 +91,13 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn old_cache_without_queue_still_loads() {
+        let cache: Cache = serde_json::from_str(r#"{"recent":["/music/a.mp3"]}"#).unwrap();
+        assert!(cache.queue.is_empty());
+        assert_eq!(cache.queue_pos, 0);
+        assert!(cache.group.is_empty());
     }
 }

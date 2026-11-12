@@ -310,6 +310,7 @@ impl Hit {
             Hit::Tab(1) => "收藏 · 2",
             Hit::Tab(2) => "最近播放 · 3",
             Hit::Tab(3) => "文件夹 · 4",
+            Hit::Tab(4) => "专辑 / 艺术家 · 5",
             Hit::Tab(_) => "视图",
             Hit::Row(_) => "单击选中 · 再点一次播放",
             Hit::PlayPause => "播放 / 暂停 · 空格",
@@ -460,8 +461,12 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
             };
             match hit {
                 Hit::Tab(index) => {
-                    let view = ["all", "fav", "recent", "folder"][index.min(3)];
-                    app.set_view(view);
+                    if index == 4 {
+                        app.open_modal(crate::app::Modal::Browse);
+                    } else {
+                        let view = ["all", "fav", "recent", "folder"][index.min(3)];
+                        app.set_view(view);
+                    }
                 }
                 Hit::Row(index) => {
                     app.selected = index;
@@ -548,6 +553,7 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                             (app.playlist_song_selected + 1).min(count.saturating_sub(1));
                     }
                     crate::app::Modal::Folders => app.folder_move(1),
+                    crate::app::Modal::Browse => app.browse_move(1),
                     crate::app::Modal::Equalizer => {
                         app.eq_selected = (app.eq_selected + 1).min(crate::app::EQ_BANDS.len());
                     }
@@ -582,6 +588,7 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                         app.playlist_song_selected = app.playlist_song_selected.saturating_sub(1);
                     }
                     crate::app::Modal::Folders => app.folder_move(-1),
+                    crate::app::Modal::Browse => app.browse_move(-1),
                     crate::app::Modal::Equalizer => {
                         app.eq_selected = app.eq_selected.saturating_sub(1);
                     }

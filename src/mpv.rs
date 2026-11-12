@@ -333,7 +333,16 @@ impl Mpv {
         self.set_prop("loop-playlist", json!(playlist))
     }
 
-    pub fn load_m3u(&mut self, list: &Path, index: usize, mode: &str) -> Result<(), String> {
+    pub fn load_m3u(
+        &mut self,
+        list: &Path,
+        index: usize,
+        mode: &str,
+        paused: bool,
+    ) -> Result<(), String> {
+        if paused {
+            self.set_prop("pause", json!(true))?;
+        }
         self.send(vec![
             json!("loadlist"),
             json!(list.to_string_lossy()),
@@ -341,7 +350,7 @@ impl Mpv {
         ])?;
         self.set_prop("playlist-pos", json!(index))?;
         self.apply_mode(mode)?;
-        self.set_prop("pause", json!(false))?;
+        self.set_prop("pause", json!(paused))?;
         std::thread::sleep(Duration::from_millis(120));
         self.refresh();
         Ok(())

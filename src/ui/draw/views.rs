@@ -171,6 +171,7 @@ pub fn draw_modal(
         ),
         Modal::Settings => draw_settings(canvas, app, hover, hits),
         Modal::Folders => draw_folders(canvas, app, hits),
+        Modal::Browse => draw_browse(canvas, app, hits),
         Modal::Playlists => draw_playlists(canvas, app, hits),
         Modal::PlaylistTracks => draw_playlist_tracks(canvas, app, hits),
         Modal::PlaylistName => draw_input(
@@ -201,8 +202,8 @@ fn frame(
 ) -> (usize, usize, usize, usize) {
     let screen_width = canvas.width();
     let screen_height = canvas.height();
-    let width = width.min(screen_width.saturating_sub(4)).max(10);
-    let height = height.min(screen_height.saturating_sub(2)).max(5);
+    let width = width.min(screen_width.saturating_sub(6)).max(10);
+    let height = height.min(screen_height.saturating_sub(8)).max(5);
     let x = (screen_width - width) / 2;
     let y = (screen_height - height) / 2;
     canvas.fill(x + 2, y + 1, width, height, Style::new(txt(), crust()));
@@ -631,6 +632,91 @@ fn draw_folders(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
         x + 2,
         y + height - 2,
         "Enter 进入文件夹 · Esc 关闭",
+        Style::new(overlay0(), mantle()),
+    );
+}
+
+fn draw_browse(canvas: &mut Canvas, app: &App, hits: &mut Vec<(Hit, Rect)>) {
+    let width = 72;
+    let height = canvas.height().saturating_sub(4).clamp(8, 24);
+    let (x, y, width, height) = frame(canvas, width, height, "分类浏览", hits);
+    let kind = if app.browse_artist {
+        "艺术家"
+    } else {
+        "专辑"
+    };
+    let groups = app.browse_list();
+    canvas.put(
+        x + 2,
+        y + 2,
+        &format!("{kind} · {} 组", groups.len()),
+        Style::new(overlay0(), mantle()),
+    );
+    let mut tab_x = x + width.saturating_sub(17);
+    for (label, active) in [("专辑", !app.browse_artist), ("艺术家", app.browse_artist)] {
+        let text = format!(" {label} ");
+        let tab_width = text_width(&text);
+        if active {
+            canvas.fill(tab_x, y + 2, tab_width, 1, Style::new(pink(), surface0()));
+        }
+        canvas.put(
+            tab_x,
+            y + 2,
+            &text,
+            if active {
+                Style::new(pink(), surface0()).bold()
+            } else {
+                Style::new(overlay0(), mantle())
+            },
+        );
+        tab_x += tab_width + 1;
+    }
+    let rows = height.saturating_sub(6);
+    if groups.is_empty() {
+        canvas.put(
+            x + 2,
+            y + 4,
+            "曲库是空的喵，按 o 换个目录",
+            Style::new(overlay0(), mantle()),
+        );
+    } else {
+        let offset = app
+            .browse_selected
+            .saturating_sub(rows / 2)
+            .min(groups.len().saturating_sub(rows));
+        for (row, (_, label, count)) in groups.iter().skip(offset).take(rows).enumerate() {
+            let index = offset + row;
+            let selected = index == app.browse_selected;
+            let row_y = y + 4 + row;
+            if selected {
+                canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), surface0()));
+            }
+            canvas.put(
+                x + 2,
+                row_y,
+                &format!(
+                    "{:>3}  {}",
+                    index + 1,
+                    truncate(label, width.saturating_sub(24))
+                ),
+                if selected {
+                    Style::new(pink(), surface0()).bold()
+                } else {
+                    Style::new(txt(), mantle())
+                },
+            );
+            canvas.put(
+                x + width - 12,
+                row_y,
+                &format!("{count} 首"),
+                Style::new(overlay0(), if selected { surface0() } else { mantle() }),
+            );
+        }
+    }
+    canvas.put(
+        x + 2,
+        y + height - 2,
+        "Tab 切换专辑 / 艺术家 · Enter 浏览 · Esc 关闭",
         Style::new(overlay0(), mantle()),
     );
 }

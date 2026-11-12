@@ -39,6 +39,7 @@ pub(crate) enum Modal {
     Seek,
     Settings,
     Folders,
+    Browse,
     Playlists,
     PlaylistTracks,
     PlaylistName,
@@ -85,6 +86,9 @@ pub struct App {
     pub(crate) stat_at: Instant,
     pub(crate) folder: String,
     pub(crate) folder_selected: usize,
+    pub(crate) group: String,
+    pub(crate) browse_selected: usize,
+    pub(crate) browse_artist: bool,
     pub(crate) playlists: Vec<crate::config::Playlist>,
     pub(crate) playlist_selected: usize,
     pub(crate) playlist_song_selected: usize,
@@ -178,13 +182,19 @@ impl App {
         cfg.theme = theme::set(&cfg.theme).to_string();
         cfg.eq_gains.truncate(EQ_BANDS.len());
         cfg.eq_gains.resize(EQ_BANDS.len(), 0.0);
-        let cached_view = if ["all", "fav", "recent", "folder"].contains(&cache.view.as_str()) {
+        let cached_view = if ["all", "fav", "recent", "folder", "album", "artist"]
+            .contains(&cache.view.as_str())
+        {
             cache.view.clone()
         } else {
             "all".into()
         };
         let cached_filter = cache.filter.clone();
         let cached_folder = cache.folder.clone();
+        let cached_group = cache.group.clone();
+        let cached_queue = cache.queue.clone();
+        let cached_queue_pos = cache.queue_pos;
+        let cached_position = cache.last_position;
         let cached_selected = cache.selected_path.clone();
         let cached_last = cache.last_path.clone();
         let bindings = build_bindings(&cfg.keys);
@@ -245,6 +255,9 @@ impl App {
             stat_at: Instant::now(),
             folder: cached_folder,
             folder_selected: 0,
+            group: cached_group,
+            browse_selected: 0,
+            browse_artist: false,
             playlists,
             playlist_selected: 0,
             playlist_song_selected: 0,
@@ -260,6 +273,12 @@ impl App {
         };
         app.selected = 0;
         app.rebuild_visible();
+        let restored = app.restore_queue(
+            &cached_queue,
+            cached_queue_pos,
+            cached_last.as_deref(),
+            cached_position,
+        );
         if app.tracks.is_empty() {
             app.notify("曲库是空的，按 o 选一个音乐目录喵");
         } else if let Some(last) = cached_selected.or(cached_last) {
@@ -270,17 +289,72 @@ impl App {
                 .position(|&index| app.tracks[index].path == path)
             {
                 app.selected = position;
-                app.notify(format!(
-                    "上次听到 · {} · Enter 继续",
-                    app.tracks[app.visible[position]].title
-                ));
-            } else {
+                if !restored {
+                    app.notify(format!(
+                        "上次听到 · {} · Enter 继续",
+                        app.tracks[app.visible[position]].title
+                    ));
+                }
+            } else if !restored {
                 app.notify("按 ? 看快捷键；空格播放，q 退出");
             }
-        } else {
+        } else if !restored {
             app.notify("按 ? 看快捷键；空格播放，q 退出");
         }
         app
+    }
+
+    fn restore_queue(
+        &mut self,
+        paths: &[String],
+        position: usize,
+        last: Option<&str>,
+        last_position: f64,
+    ) -> bool {
+        let queue: Vec<Track> = paths
+            .iter()
+            .filter_map(|path| {
+                let path = PathBuf::from(path);
+                self.tracks.iter().find(|track| track.path == path).cloned()
+            })
+            .collect();
+        if queue.is_empty() {
+            return false;
+        }
+        let index = last
+            .and_then(|last| {
+                queue
+                    .iter()
+                    .position(|track| track.path.to_string_lossy() == last)
+            })
+            .unwrap_or(position.min(queue.len() - 1));
+        let list = Self::temp_m3u();
+        if library::write_m3u(&list, &queue).is_err()
+            || self.mpv.load_m3u(&list, index, &self.mode, true).is_err()
+        {
+            return false;
+        }
+        let Some(path) = self.mpv.state.path.clone() else {
+            return false;
+        };
+        self.session = queue;
+        self.last_path = Some(path.clone());
+        self.last_position = last_position;
+        self.last_duration = self.mpv.state.duration;
+        if self.cfg.resume
+            && last == Some(path.to_string_lossy().as_ref())
+            && let Some(target) = resume_target(last_position, self.mpv.state.duration)
+        {
+            let _ = self.mpv.seek(target, true);
+            self.last_position = target;
+        }
+        self.lrc = Lrc::load_for(&path);
+        self.lrc_path = Some(path);
+        self.notify(format!(
+            "已恢复上次队列 · {} 首 · 空格继续",
+            self.session.len()
+        ));
+        true
     }
 
     pub fn tick(&mut self) {
@@ -418,6 +492,18 @@ impl App {
         self.cache.view = self.view.clone();
         self.cache.filter = self.filter.clone();
         self.cache.folder = self.folder.clone();
+        self.cache.group = self.group.clone();
+        self.cache.queue = self
+            .session
+            .iter()
+            .map(|track| track.path.to_string_lossy().to_string())
+            .collect();
+        self.cache.queue_pos = self
+            .mpv
+            .state
+            .playlist_pos
+            .and_then(|position| usize::try_from(position).ok())
+            .unwrap_or(0);
         self.cache.selected_path = selected_path;
         self.cfg.playlists = self.playlists.clone();
         if let Err(err) = self.cfg.save() {
@@ -436,6 +522,7 @@ impl App {
     pub(crate) fn rebuild_visible(&mut self) {
         let needle = self.filter.to_lowercase();
         let view = self.view.clone();
+        let root = std::path::Path::new(&self.cfg.music_dir);
         let mut visible = Vec::new();
         for (index, track) in self.tracks.iter().enumerate() {
             let in_view = match view.as_str() {
@@ -445,16 +532,9 @@ impl App {
                     .recent
                     .iter()
                     .any(|path| path == &track.path.to_string_lossy()),
-                "folder" => {
-                    let root = std::path::Path::new(&self.cfg.music_dir);
-                    let folder = track
-                        .path
-                        .parent()
-                        .and_then(|parent| parent.strip_prefix(root).ok())
-                        .map(|path| path.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    folder == self.folder
-                }
+                "folder" => library::group_key(&track.path, root, false) == self.folder,
+                "album" => library::group_key(&track.path, root, false) == self.group,
+                "artist" => library::group_key(&track.path, root, true) == self.group,
                 _ => true,
             };
             if in_view
@@ -514,6 +594,14 @@ impl App {
             .map(|&index| &self.tracks[index])
     }
 
+    pub(crate) fn plays_of(&self, path: &std::path::Path) -> u64 {
+        self.cache
+            .plays
+            .get(&path.to_string_lossy().to_string())
+            .copied()
+            .unwrap_or(0)
+    }
+
     pub(crate) fn view_label(&self) -> String {
         match self.view.as_str() {
             "fav" => "收藏".into(),
@@ -523,6 +611,24 @@ impl App {
                     "文件夹 · 根目录".into()
                 } else {
                     format!("文件夹 · {}", self.folder)
+                }
+            }
+            "album" => {
+                if self.group.is_empty() {
+                    "专辑 · 根目录".into()
+                } else {
+                    let label = std::path::Path::new(&self.group)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                        .unwrap_or_else(|| self.group.clone());
+                    format!("专辑 · {label}")
+                }
+            }
+            "artist" => {
+                if self.group.is_empty() {
+                    "艺术家 · 根目录".into()
+                } else {
+                    format!("艺术家 · {}", self.group)
                 }
             }
             _ => "全部歌曲".into(),
