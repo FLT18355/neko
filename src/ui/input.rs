@@ -144,14 +144,6 @@ fn handle_modal(app: &mut App, key: KeyEvent) {
             KeyCode::Enter => app.select_folder(),
             _ => {}
         },
-        Modal::Browse => match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
-            KeyCode::Up | KeyCode::Char('k') => app.browse_move(-1),
-            KeyCode::Down | KeyCode::Char('j') => app.browse_move(1),
-            KeyCode::Tab | KeyCode::Left | KeyCode::Right => app.toggle_browse_kind(),
-            KeyCode::Enter => app.select_browse(),
-            _ => {}
-        },
         Modal::Equalizer => match key.code {
             KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
             KeyCode::Up | KeyCode::Char('k') => {

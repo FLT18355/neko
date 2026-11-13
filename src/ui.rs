@@ -362,7 +362,6 @@ pub enum Hit {
     EqualizerRow(usize),
     EqualizerLeft(usize),
     EqualizerRight(usize),
-    BrowseTab(bool),
     ModalButton(ModalButton),
     ModalPanel,
 }
@@ -374,7 +373,6 @@ impl Hit {
             Hit::Tab(1) => "收藏 · 2",
             Hit::Tab(2) => "最近播放 · 3",
             Hit::Tab(3) => "文件夹 · 4",
-            Hit::Tab(4) => "专辑 / 艺术家 · 5",
             Hit::Tab(_) => "视图",
             Hit::Row(_) => "单击选中 · 再点一次播放",
             Hit::PlayPause => "播放 / 暂停 · 空格",
@@ -413,8 +411,6 @@ impl Hit {
             Hit::EqualizerRow(_) => "单击选中 · 双击归零",
             Hit::EqualizerLeft(_) => "降低 1 dB",
             Hit::EqualizerRight(_) => "提高 1 dB",
-            Hit::BrowseTab(true) => "按艺术家浏览",
-            Hit::BrowseTab(false) => "按专辑浏览",
             Hit::ModalButton(button) => button.label(),
             Hit::ModalPanel => "窗口",
         }
@@ -565,8 +561,6 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                 Hit::Tab(index) => {
                     if index == 3 {
                         app.open_modal(Modal::Folders);
-                    } else if index == 4 {
-                        app.open_modal(crate::app::Modal::Browse);
                     } else {
                         let view = ["all", "fav", "recent"][index.min(2)];
                         app.set_view(view);
@@ -682,7 +676,6 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                     }
                     crate::app::Modal::Folders => app.folder_move(1),
                     crate::app::Modal::Directory => app.dir_move(1),
-                    crate::app::Modal::Browse => app.browse_move(1),
                     crate::app::Modal::Equalizer => {
                         app.eq_selected = (app.eq_selected + 1).min(crate::app::EQ_BANDS.len());
                     }
@@ -722,7 +715,6 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                     }
                     crate::app::Modal::Folders => app.folder_move(-1),
                     crate::app::Modal::Directory => app.dir_move(-1),
-                    crate::app::Modal::Browse => app.browse_move(-1),
                     crate::app::Modal::Equalizer => {
                         app.eq_selected = app.eq_selected.saturating_sub(1);
                     }
@@ -788,10 +780,6 @@ fn handle_modal_click(app: &mut crate::app::App, ui: &mut UiState, hit: Hit) {
             app.eq_selected = index.min(crate::app::EQ_BANDS.len());
             app.adjust_eq(index, 1.0);
         }
-        Hit::BrowseTab(artist) => {
-            app.browse_artist = artist;
-            app.browse_selected = 0;
-        }
         Hit::ModalButton(button) => handle_modal_button(app, button),
         _ => app.close_modal(),
     }
@@ -804,9 +792,6 @@ fn select_modal_row(app: &mut crate::app::App, index: usize) {
         }
         Some(Modal::Directory) => {
             app.dir_selected = index.min(app.cfg.music_dirs.len().saturating_sub(1));
-        }
-        Some(Modal::Browse) => {
-            app.browse_selected = index.min(app.browse_list().len().saturating_sub(1));
         }
         Some(Modal::Playlists) => {
             app.playlist_selected = index.min(app.playlists.len().saturating_sub(1));
@@ -833,7 +818,6 @@ fn activate_modal_row(app: &mut crate::app::App) {
     match app.modal {
         Some(Modal::Folders) => app.select_folder(),
         Some(Modal::Directory) => app.rescan(),
-        Some(Modal::Browse) => app.select_browse(),
         Some(Modal::Playlists) => app.open_playlist_tracks(),
         Some(Modal::PlaylistTracks) => app.play_playlist(app.playlist_song_selected),
         Some(Modal::AudioDevice) => app.apply_device(),

@@ -137,7 +137,6 @@ fn draw_header(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Ve
         ("收藏", app.view == "fav"),
         ("最近", app.view == "recent"),
         ("文件夹", app.view == "folder"),
-        ("分类", matches!(app.view.as_str(), "album" | "artist")),
     ];
     for (index, (label, active)) in tabs.into_iter().enumerate() {
         let hovered = hover == Some(Hit::Tab(index));

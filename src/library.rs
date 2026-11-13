@@ -131,50 +131,6 @@ pub fn folders(tracks: &[Track], roots: &[PathBuf]) -> Vec<(String, usize)> {
     map.into_iter().collect()
 }
 
-pub fn group_key(path: &Path, roots: &[PathBuf], artist: bool) -> String {
-    let folder = relative_folder(path, roots);
-    if artist {
-        folder.split('/').next().unwrap_or("").to_string()
-    } else {
-        folder
-    }
-}
-
-pub fn album_groups(tracks: &[Track], roots: &[PathBuf]) -> Vec<(String, String, usize)> {
-    let mut map: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-    for track in tracks {
-        *map.entry(relative_folder(&track.path, roots)).or_insert(0) += 1;
-    }
-    map.into_iter()
-        .map(|(key, count)| {
-            let parts: Vec<&str> = key.split('/').filter(|part| !part.is_empty()).collect();
-            let label = match parts.as_slice() {
-                [] => "根目录".to_string(),
-                [album] => (*album).to_string(),
-                [.., artist, album] => format!("{artist} · {album}"),
-            };
-            (key, label, count)
-        })
-        .collect()
-}
-
-pub fn artist_groups(tracks: &[Track], roots: &[PathBuf]) -> Vec<(String, String, usize)> {
-    let mut map: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-    for track in tracks {
-        *map.entry(group_key(&track.path, roots, true)).or_insert(0) += 1;
-    }
-    map.into_iter()
-        .map(|(key, count)| {
-            let label = if key.is_empty() {
-                "根目录".to_string()
-            } else {
-                key.clone()
-            };
-            (key, label, count)
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,48 +215,9 @@ mod tests {
     }
 
     #[test]
-    fn groups_albums_and_artists_by_folder_hierarchy() {
-        let roots = [PathBuf::from("/music")];
-        let track = |path: &str| Track {
-            path: PathBuf::from(path),
-            title: String::new(),
-            modified: 0,
-        };
-        let tracks = [
-            track("/music/a.mp3"),
-            track("/music/Artist/Album/b.mp3"),
-            track("/music/Artist/Other/c.mp3"),
-        ];
-        assert_eq!(
-            album_groups(&tracks, &roots),
-            vec![
-                ("".to_string(), "根目录".to_string(), 1),
-                ("Artist/Album".to_string(), "Artist · Album".to_string(), 1),
-                ("Artist/Other".to_string(), "Artist · Other".to_string(), 1),
-            ]
-        );
-        assert_eq!(
-            artist_groups(&tracks, &roots),
-            vec![
-                ("".to_string(), "根目录".to_string(), 1),
-                ("Artist".to_string(), "Artist".to_string(), 2),
-            ]
-        );
-        assert_eq!(
-            group_key(Path::new("/music/Artist/Album/b.mp3"), &roots, false),
-            "Artist/Album"
-        );
-        assert_eq!(
-            group_key(Path::new("/music/Artist/Album/b.mp3"), &roots, true),
-            "Artist"
-        );
-    }
-
-    #[test]
-    fn nested_root_wins_for_grouping() {
+    fn relative_folder_prefers_nested_root() {
         let roots = [PathBuf::from("/music"), PathBuf::from("/music/rock")];
         let path = PathBuf::from("/music/rock/album/a.mp3");
         assert_eq!(relative_folder(&path, &roots), "album");
-        assert_eq!(group_key(&path, &roots, true), "album");
     }
 }

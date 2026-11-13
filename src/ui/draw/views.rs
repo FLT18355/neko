@@ -218,7 +218,6 @@ pub fn draw_modal(
         ),
         Modal::Settings => draw_settings(canvas, app, hover, hits),
         Modal::Folders => draw_folders(canvas, app, hover, hits),
-        Modal::Browse => draw_browse(canvas, app, hover, hits),
         Modal::Playlists => draw_playlists(canvas, app, hover, hits),
         Modal::PlaylistTracks => draw_playlist_tracks(canvas, app, hover, hits),
         Modal::PlaylistName => draw_input(
@@ -872,111 +871,6 @@ fn draw_folders(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut V
                 canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), surface0()));
             }
             let label = if name.is_empty() { "根目录" } else { name };
-            canvas.put(
-                x + 2,
-                row_y,
-                &format!(
-                    "{:>3}  {}",
-                    index + 1,
-                    truncate(label, width.saturating_sub(24))
-                ),
-                if selected || row_hover {
-                    Style::new(pink(), surface0()).bold()
-                } else {
-                    Style::new(txt(), mantle())
-                },
-            );
-            canvas.put(
-                x + width - 12,
-                row_y,
-                &format!("{count} 首"),
-                Style::new(overlay0(), if selected { surface0() } else { mantle() }),
-            );
-            hits.push((Hit::ModalRow(index), Rect::new(x + 1, row_y, width - 2, 1)));
-        }
-    }
-    let limit = x + width - 2;
-    let mut button_x = x + 2;
-    button_x = modal_button(
-        canvas,
-        button_x,
-        y + height - 2,
-        limit,
-        ModalButton::Open,
-        hover,
-        hits,
-    );
-    let _ = modal_button(
-        canvas,
-        button_x,
-        y + height - 2,
-        limit,
-        ModalButton::Close,
-        hover,
-        hits,
-    );
-}
-
-fn draw_browse(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
-    let width = 72;
-    let height = canvas.height().saturating_sub(4).clamp(8, 24);
-    let (x, y, width, height) = frame(canvas, width, height, "分类浏览", hits);
-    let kind = if app.browse_artist {
-        "艺术家"
-    } else {
-        "专辑"
-    };
-    let groups = app.browse_list();
-    canvas.put(
-        x + 2,
-        y + 2,
-        &format!("{kind} · {} 组", groups.len()),
-        Style::new(overlay0(), mantle()),
-    );
-    let mut tab_x = x + width.saturating_sub(17);
-    for (label, artist) in [("专辑", false), ("艺术家", true)] {
-        let active = app.browse_artist == artist;
-        let hit = Hit::BrowseTab(artist);
-        let hovered = hover == Some(hit);
-        let text = format!(" {label} ");
-        let tab_width = text_width(&text);
-        if active || hovered {
-            canvas.fill(tab_x, y + 2, tab_width, 1, Style::new(pink(), surface0()));
-        }
-        canvas.put(
-            tab_x,
-            y + 2,
-            &text,
-            if active || hovered {
-                Style::new(pink(), surface0()).bold()
-            } else {
-                Style::new(overlay0(), mantle())
-            },
-        );
-        hits.push((hit, Rect::new(tab_x, y + 2, tab_width, 1)));
-        tab_x += tab_width + 1;
-    }
-    let rows = height.saturating_sub(6);
-    if groups.is_empty() {
-        canvas.put(
-            x + 2,
-            y + 4,
-            "曲库是空的喵，按 o 换个目录",
-            Style::new(overlay0(), mantle()),
-        );
-    } else {
-        let offset = app
-            .browse_selected
-            .saturating_sub(rows / 2)
-            .min(groups.len().saturating_sub(rows));
-        for (row, (_, label, count)) in groups.iter().skip(offset).take(rows).enumerate() {
-            let index = offset + row;
-            let selected = index == app.browse_selected;
-            let row_hover = hover == Some(Hit::ModalRow(index));
-            let row_y = y + 4 + row;
-            if selected || row_hover {
-                canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), surface0()));
-            }
             canvas.put(
                 x + 2,
                 row_y,

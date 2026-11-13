@@ -40,7 +40,6 @@ pub(crate) enum Modal {
     Seek,
     Settings,
     Folders,
-    Browse,
     Playlists,
     PlaylistTracks,
     PlaylistName,
@@ -88,9 +87,6 @@ pub struct App {
     pub(crate) folder: String,
     pub(crate) folder_selected: usize,
     pub(crate) dir_selected: usize,
-    pub(crate) group: String,
-    pub(crate) browse_selected: usize,
-    pub(crate) browse_artist: bool,
     pub(crate) playlists: Vec<crate::config::Playlist>,
     pub(crate) playlist_selected: usize,
     pub(crate) playlist_song_selected: usize,
@@ -187,7 +183,7 @@ impl App {
         cfg.theme = theme::set(&cfg.theme).to_string();
         cfg.eq_gains.truncate(EQ_BANDS.len());
         cfg.eq_gains.resize(EQ_BANDS.len(), 0.0);
-        let cached_view = if ["all", "fav", "recent", "folder", "album", "artist"]
+        let cached_view = if ["all", "fav", "recent", "folder"]
             .contains(&cache.view.as_str())
         {
             cache.view.clone()
@@ -196,7 +192,6 @@ impl App {
         };
         let cached_filter = cache.filter.clone();
         let cached_folder = cache.folder.clone();
-        let cached_group = cache.group.clone();
         let cached_queue = cache.queue.clone();
         let cached_queue_pos = cache.queue_pos;
         let cached_position = cache.last_position;
@@ -261,9 +256,6 @@ impl App {
             folder: cached_folder,
             folder_selected: 0,
             dir_selected: 0,
-            group: cached_group,
-            browse_selected: 0,
-            browse_artist: false,
             playlists,
             playlist_selected: 0,
             playlist_song_selected: 0,
@@ -498,7 +490,6 @@ impl App {
         self.cache.view = self.view.clone();
         self.cache.filter = self.filter.clone();
         self.cache.folder = self.folder.clone();
-        self.cache.group = self.group.clone();
         self.cache.queue = self
             .session
             .iter()
@@ -550,9 +541,7 @@ impl App {
                     .recent
                     .iter()
                     .any(|path| path == &track.path.to_string_lossy()),
-                "folder" => library::group_key(&track.path, &roots, false) == self.folder,
-                "album" => library::group_key(&track.path, &roots, false) == self.group,
-                "artist" => library::group_key(&track.path, &roots, true) == self.group,
+                "folder" => library::relative_folder(&track.path, &roots) == self.folder,
                 _ => true,
             };
             if in_view
@@ -647,24 +636,6 @@ impl App {
                     "文件夹 · 根目录".into()
                 } else {
                     format!("文件夹 · {}", self.folder)
-                }
-            }
-            "album" => {
-                if self.group.is_empty() {
-                    "专辑 · 根目录".into()
-                } else {
-                    let label = std::path::Path::new(&self.group)
-                        .file_name()
-                        .map(|name| name.to_string_lossy().to_string())
-                        .unwrap_or_else(|| self.group.clone());
-                    format!("专辑 · {label}")
-                }
-            }
-            "artist" => {
-                if self.group.is_empty() {
-                    "艺术家 · 根目录".into()
-                } else {
-                    format!("艺术家 · {}", self.group)
                 }
             }
             _ => "全部歌曲".into(),
