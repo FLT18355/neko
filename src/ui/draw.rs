@@ -2,6 +2,7 @@ mod views;
 
 use super::*;
 use crate::app::App;
+use crate::clock;
 use crate::library;
 
 pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
@@ -102,7 +103,7 @@ pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
         hits,
     );
 
-    draw_gradient_line(canvas, separator_y, pink(), mauve(), lavender());
+    draw_rainbow_line(canvas, separator_y);
     draw_footer(canvas, app, footer_y, width, height, hover, hits);
 
     if let Some(modal) = app.modal {
@@ -110,20 +111,10 @@ pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
     }
 }
 
-fn draw_gradient_line(canvas: &mut Canvas, y: usize, start: Rgb, middle: Rgb, end: Rgb) {
+fn draw_rainbow_line(canvas: &mut Canvas, y: usize) {
     let width = canvas.width();
     for column in 0..width {
-        let ratio = column as f64 / width.max(1) as f64;
-        let (from, to, local) = if ratio < 0.5 {
-            (start, middle, ratio * 2.0)
-        } else {
-            (middle, end, (ratio - 0.5) * 2.0)
-        };
-        let color = (
-            (from.0 as f64 + (to.0 as f64 - from.0 as f64) * local) as u8,
-            (from.1 as f64 + (to.1 as f64 - from.1 as f64) * local) as u8,
-            (from.2 as f64 + (to.2 as f64 - from.2 as f64) * local) as u8,
-        );
+        let color = rainbow(column as f64 / width.max(1) as f64);
         canvas.put(column, y, "─", Style::new(color, base()));
     }
 }
@@ -150,12 +141,13 @@ fn draw_header(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Ve
     ];
     for (index, (label, active)) in tabs.into_iter().enumerate() {
         let hovered = hover == Some(Hit::Tab(index));
+        let color = accent(index);
         let style = if active {
-            Style::new(crust(), pink()).bold()
+            Style::new(ink_on(color), color).bold()
         } else if hovered {
             Style::new(selected_fg(), surface0()).bold()
         } else {
-            Style::new(sub0(), crust())
+            Style::new(color, crust()).bold()
         };
         let text = format!(" {label} ");
         let width = text_width(&text);
@@ -181,16 +173,27 @@ fn draw_header(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Ve
             .div_ceil(60);
         status.push_str(&format!(" · {} {}m", CLOCK, minutes.max(1)));
     }
-    let status_width = text_width(&status);
-    if status_width + x + 3 < width {
+    let clock_text = format!("{} {}", CLOCK, clock::now());
+    let clock_width = text_width(&clock_text);
+    let clock_x = width.saturating_sub(clock_width + 2);
+    if clock_width + 20 < width {
         canvas.put(
-            width - status_width - 2,
+            clock_x,
+            0,
+            &clock_text,
+            Style::new(peach(), crust()).bold(),
+        );
+    }
+    let status_width = text_width(&status);
+    if status_width + x + 3 < clock_x {
+        canvas.put(
+            clock_x.saturating_sub(status_width + 2),
             0,
             &status,
             Style::new(if state.pause { overlay0() } else { sub1() }, crust()),
         );
     }
-    draw_gradient_line(canvas, 1, surface0(), surface1(), mauve());
+    draw_rainbow_line(canvas, 1);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -214,7 +217,12 @@ fn draw_library(
         for (row, line) in art.iter().enumerate() {
             let text = line.trim_end();
             let offset = (width.saturating_sub(text_width(text))) / 2;
-            canvas.put(x + offset, start + row, text, Style::new(mauve(), mantle()));
+            canvas.put(
+                x + offset,
+                start + row,
+                text,
+                Style::new(accent(row), mantle()).bold(),
+            );
         }
         let hint = "空空的喵…按 o 换个目录";
         let offset = (width.saturating_sub(text_width(hint))) / 2;
@@ -239,10 +247,14 @@ fn draw_library(
         let selected = index == app.selected;
         let hovered = hover == Some(Hit::Row(index));
         let playing = current.as_ref() == Some(&track.path);
-        let background = if selected {
+        let background = if app.transparent {
+            mantle()
+        } else if selected {
             surface0()
         } else if hovered {
             mix(mantle(), surface0(), 0.5)
+        } else if index % 2 == 0 {
+            mix(mantle(), surface0(), 0.22)
         } else {
             mantle()
         };
@@ -308,22 +320,18 @@ fn draw_library(
                 Style::new(if playing { pink() } else { surface2() }, background),
             );
         }
-        if let Some(parent) = track.path.parent()
-            && let Ok(relative) = parent.strip_prefix(&app.cfg.music_dir)
-        {
-            let folder = relative.to_string_lossy();
-            if !folder.is_empty() {
-                let text = format!(" {folder}");
-                let text = truncate(&text, title_width / 3);
-                let folder_width = text_width(&text);
-                if folder_width + play_width + 12 < width {
-                    canvas.put(
-                        x + width - play_width - folder_width - 3,
-                        y,
-                        &text,
-                        Style::new(overlay0(), background),
-                    );
-                }
+        let folder = app.relative_folder(&track.path);
+        if !folder.is_empty() {
+            let text = format!(" {folder}");
+            let text = truncate(&text, title_width / 3);
+            let folder_width = text_width(&text);
+            if folder_width + play_width + 12 < width {
+                canvas.put(
+                    x + width - play_width - folder_width - 3,
+                    y,
+                    &text,
+                    Style::new(mix(overlay0(), accent(index + 2), 0.55), background),
+                );
             }
         }
     }
@@ -339,7 +347,14 @@ fn draw_library(
                 right,
                 top + row,
                 if thumb { "▐" } else { "│" },
-                Style::new(if thumb { lavender() } else { surface0() }, mantle()),
+                Style::new(
+                    if thumb {
+                        rainbow(row as f64 / rows.max(1) as f64)
+                    } else {
+                        surface0()
+                    },
+                    mantle(),
+                ),
             );
         }
         hits.push((
@@ -369,7 +384,12 @@ fn draw_now_playing(
         let start = top + height.saturating_sub(art.len() + 3) / 2;
         for (row, line) in art.iter().enumerate() {
             let offset = (width.saturating_sub(text_width(line))) / 2;
-            canvas.put(x + offset, start + row, line, Style::new(mauve(), mantle()));
+            canvas.put(
+                x + offset,
+                start + row,
+                line,
+                Style::new(accent(row), mantle()).bold(),
+            );
         }
         let hint = "选一首歌，按 Enter 开始喵";
         let offset = (width.saturating_sub(text_width(hint))) / 2;
@@ -418,15 +438,19 @@ fn draw_now_playing(
     let title_lines = wrap(&title, width.saturating_sub(4), 2);
     let card_height = title_lines.len() + usize::from(!subtitle.is_empty());
     if card_height > 0 && card_height < height {
-        let card_bg = mix(
-            mantle(),
-            surface0(),
-            if hover == Some(Hit::TrackInfo) {
-                0.8
-            } else {
-                0.55
-            },
-        );
+        let card_bg = if app.transparent {
+            mantle()
+        } else {
+            mix(
+                mantle(),
+                surface0(),
+                if hover == Some(Hit::TrackInfo) {
+                    0.8
+                } else {
+                    0.55
+                },
+            )
+        };
         canvas.fill(x, y, width, card_height, Style::new(txt(), card_bg));
         hits.push((Hit::TrackInfo, Rect::new(x, y, width, card_height)));
         for (row, line) in title_lines.iter().enumerate() {
@@ -509,8 +533,7 @@ fn draw_now_playing(
         let bar_y = y;
         for column in 0..bar_width {
             let (ch, color) = if column < filled {
-                let local = column as f64 / bar_width.max(1) as f64;
-                ("━", mix(pink(), mauve(), local))
+                ("━", rainbow(column as f64 / bar_width.max(1) as f64))
             } else {
                 ("─", surface1())
             };
@@ -606,7 +629,7 @@ fn draw_now_playing(
         for column in 0..slider_width {
             let ch = if column < volume_filled { "━" } else { "─" };
             let color = if column < volume_filled {
-                lavender()
+                rainbow(column as f64 / slider_width.max(1) as f64)
             } else {
                 surface1()
             };
@@ -642,6 +665,7 @@ fn draw_now_playing(
         let mut chip_x = x;
         chip_x = draw_chip(
             canvas,
+            app,
             chip_x,
             y,
             limit,
@@ -654,6 +678,7 @@ fn draw_now_playing(
         if (state.speed - 1.0).abs() > 0.001 {
             chip_x = draw_chip(
                 canvas,
+                app,
                 chip_x,
                 y,
                 limit,
@@ -667,6 +692,7 @@ fn draw_now_playing(
         if state.pause {
             chip_x = draw_chip(
                 canvas,
+                app,
                 chip_x,
                 y,
                 limit,
@@ -685,6 +711,7 @@ fn draw_now_playing(
                 .max(1);
             chip_x = draw_chip(
                 canvas,
+                app,
                 chip_x,
                 y,
                 limit,
@@ -698,6 +725,7 @@ fn draw_now_playing(
         if let (Some(position), Some(count)) = (state.playlist_pos, state.playlist_count) {
             chip_x = draw_chip(
                 canvas,
+                app,
                 chip_x,
                 y,
                 limit,
@@ -716,6 +744,7 @@ fn draw_now_playing(
             };
             chip_x = draw_chip(
                 canvas,
+                app,
                 chip_x,
                 y,
                 limit,
@@ -729,6 +758,7 @@ fn draw_now_playing(
         if app.cfg.eq_on {
             let _ = draw_chip(
                 canvas,
+                app,
                 chip_x,
                 y,
                 limit,
@@ -848,7 +878,11 @@ fn draw_now_playing(
             if let Some((index, lines)) = app.current_lyric() {
                 let available = lyric_bottom.saturating_sub(y);
                 let (start, end) = crate::lyrics::window(index, lines.len(), available);
-                let highlight_bg = mix(mantle(), surface0(), 0.65);
+                let highlight_bg = if app.transparent {
+                    mantle()
+                } else {
+                    mix(mantle(), surface0(), 0.65)
+                };
                 for (line_index, (_, text)) in lines.iter().enumerate().take(end).skip(start) {
                     let row_y = y + line_index - start;
                     if line_index == index {
@@ -909,6 +943,7 @@ fn mix(from: Rgb, to: Rgb, ratio: f64) -> Rgb {
 #[allow(clippy::too_many_arguments)]
 fn draw_chip(
     canvas: &mut Canvas,
+    app: &App,
     x: usize,
     y: usize,
     limit: usize,
@@ -925,7 +960,13 @@ fn draw_chip(
         return x;
     }
     let active = hit.is_some() && hover == hit;
-    let background = if active { surface1() } else { surface0() };
+    let background = if active {
+        surface1()
+    } else if app.transparent {
+        mantle()
+    } else {
+        surface0()
+    };
     canvas.put(
         x,
         y,
@@ -981,143 +1022,55 @@ fn draw_footer(
         y,
         text_width(&line).min(width.saturating_sub(4)) + 2,
         1,
-        Style::new(txt(), surface0()),
+        Style::new(
+            txt(),
+            if app.transparent { mantle() } else { surface0() },
+        ),
     );
     canvas.put(3, y, &truncate(&line, width.saturating_sub(6)), style);
     if height <= y + 1 {
         return;
     }
-    let mut x = 2;
-    let play_label = if app.mpv.state.pause {
-        "继续"
-    } else {
-        "暂停"
-    };
-    x = control(
-        canvas,
-        x,
-        y + 1,
-        width.saturating_sub(2),
-        Hit::Prev,
-        PREV,
-        "上一首",
-        hover,
-        hits,
-    );
-    x = control(
-        canvas,
-        x,
-        y + 1,
-        width.saturating_sub(2),
-        Hit::PlayPause,
-        if app.mpv.state.pause { PLAY } else { PAUSE },
-        play_label,
-        hover,
-        hits,
-    );
-    x = control(
-        canvas,
-        x,
-        y + 1,
-        width.saturating_sub(2),
-        Hit::Next,
-        NEXT,
-        "下一首",
-        hover,
-        hits,
-    );
-    x = control(
-        canvas,
-        x,
-        y + 1,
-        width.saturating_sub(2),
-        Hit::Mode,
-        REPEAT,
-        "模式",
-        hover,
-        hits,
-    );
-    x = control(
-        canvas,
-        x,
-        y + 1,
-        width.saturating_sub(2),
-        Hit::Shuffle,
-        RANDOM,
-        "随机",
-        hover,
-        hits,
-    );
     let favorite = app
         .selected_track()
         .map(|track| app.cfg.is_favorite(&track.path))
         .unwrap_or(false);
-    x = control(
-        canvas,
-        x,
-        y + 1,
-        width.saturating_sub(2),
-        Hit::Favorite,
-        if favorite { HEART } else { HEART_O },
-        "收藏",
-        hover,
-        hits,
-    );
-    x = control(
-        canvas,
-        x,
-        y + 1,
-        width.saturating_sub(2),
-        Hit::Search,
-        SEARCH,
-        "搜索",
-        hover,
-        hits,
-    );
-    x = control(
-        canvas,
-        x,
-        y + 1,
-        width.saturating_sub(2),
-        Hit::Queue,
-        LIST,
-        "队列",
-        hover,
-        hits,
-    );
-    x = control(
-        canvas,
-        x,
-        y + 1,
-        width.saturating_sub(2),
-        Hit::Settings,
-        GEAR,
-        "设置",
-        hover,
-        hits,
-    );
-    x = control(
-        canvas,
-        x,
-        y + 1,
-        width.saturating_sub(2),
-        Hit::Help,
-        "?",
-        "帮助",
-        hover,
-        hits,
-    );
-    control(
-        canvas,
-        x,
-        y + 1,
-        width.saturating_sub(2),
-        Hit::Quit,
-        POWER,
-        "退出",
-        hover,
-        hits,
-    );
+    let controls = [
+        (PREV, Hit::Prev, "上一首"),
+        (
+            if app.mpv.state.pause { PLAY } else { PAUSE },
+            Hit::PlayPause,
+            if app.mpv.state.pause { "继续" } else { "暂停" },
+        ),
+        (NEXT, Hit::Next, "下一首"),
+        (REPEAT, Hit::Mode, "模式"),
+        (RANDOM, Hit::Shuffle, "随机"),
+        (
+            if favorite { HEART } else { HEART_O },
+            Hit::Favorite,
+            "收藏",
+        ),
+        (SEARCH, Hit::Search, "搜索"),
+        (LIST, Hit::Queue, "队列"),
+        (GEAR, Hit::Settings, "设置"),
+        ("?", Hit::Help, "帮助"),
+        (POWER, Hit::Quit, "退出"),
+    ];
+    let mut x = 2;
+    for (index, (icon, hit, label)) in controls.into_iter().enumerate() {
+        x = control(
+            canvas,
+            x,
+            y + 1,
+            width.saturating_sub(2),
+            hit,
+            icon,
+            label,
+            accent(index + 3),
+            hover,
+            hits,
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1129,6 +1082,7 @@ fn control(
     hit: Hit,
     icon: &str,
     label: &str,
+    color: Rgb,
     hover: Option<Hit>,
     hits: &mut Vec<(Hit, Rect)>,
 ) -> usize {
@@ -1142,13 +1096,13 @@ fn control(
         return x;
     }
     let active = hover == Some(hit);
-    let style = if active {
-        Style::new(pink(), surface0()).bold()
+    let (fg, bg) = if active {
+        (ink_on(color), color)
     } else {
-        Style::new(sub0(), mantle())
+        (color, mantle())
     };
-    canvas.fill(x, y, button_width, 1, Style::new(style.fg, style.bg));
-    canvas.put(x + 1, y, &text, style);
+    canvas.fill(x, y, button_width, 1, Style::new(fg, bg));
+    canvas.put(x + 1, y, &text, Style::new(fg, bg).bold());
     hits.push((hit, Rect::new(x, y, button_width, 1)));
     x + button_width + 1
 }

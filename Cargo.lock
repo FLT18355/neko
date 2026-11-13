@@ -102,9 +102,10 @@ dependencies = [
 
 [[package]]
 name = "neko"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "crossterm",
+ "libc",
  "serde",
  "serde_json",
  "unicode-width",

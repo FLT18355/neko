@@ -494,13 +494,13 @@ impl App {
     }
 
     pub(crate) fn rescan(&mut self) {
-        let dir = config::expand_path(&self.cfg.music_dir);
-        if !dir.is_dir() {
-            self.notify(format!("目录不存在：{}", dir.display()));
+        let dirs = self.roots();
+        if let Some(missing) = dirs.iter().find(|dir| !dir.is_dir()) {
+            self.notify(format!("目录不存在：{}", missing.display()));
             return;
         }
         let current = self.current_path();
-        self.tracks = library::scan(&dir);
+        self.tracks = library::scan_dirs(&dirs);
         library::sort_tracks(&mut self.tracks, &self.sort);
         self.rebuild_visible();
         if let Some(path) = current
@@ -511,29 +511,61 @@ impl App {
         {
             self.selected = position;
         }
-        self.notify(format!("扫描完成 · {} 首", self.tracks.len()));
+        self.notify(format!(
+            "扫描完成 · {} 首 · {} 个目录",
+            self.tracks.len(),
+            dirs.len()
+        ));
     }
 
-    pub(crate) fn set_music_dir(&mut self, raw: &str) -> Result<(), String> {
+    pub(crate) fn dir_list(&self) -> Vec<String> {
+        self.cfg.music_dirs.clone()
+    }
+
+    pub(crate) fn dir_move(&mut self, delta: isize) {
+        let count = self.cfg.music_dirs.len();
+        if count == 0 {
+            return;
+        }
+        self.dir_selected = (self.dir_selected as isize + delta)
+            .clamp(0, count.saturating_sub(1) as isize) as usize;
+    }
+
+    pub(crate) fn add_music_dir(&mut self, raw: &str) -> Result<(), String> {
         let path = config::expand_path(raw.trim());
         if !path.is_dir() {
             return Err(format!("不是有效目录：{}", path.display()));
         }
         let path = path.canonicalize().unwrap_or(path);
-        self.cfg.music_dir = path.to_string_lossy().to_string();
+        let value = path.to_string_lossy().to_string();
+        if self.cfg.music_dirs.contains(&value) {
+            return Err(format!("目录已经在列表里：{}", path.display()));
+        }
+        self.cfg.music_dirs.push(value);
         self.cfg
             .save()
             .map_err(|err| format!("保存目录失败：{err}"))?;
-        self.tracks = library::scan(&path);
-        library::sort_tracks(&mut self.tracks, &self.sort);
-        self.selected = 0;
-        self.rebuild_visible();
-        self.notify(format!(
-            "音乐目录 · {}（{} 首）",
-            path.display(),
-            self.tracks.len()
-        ));
+        self.rescan();
+        self.notify(format!("已添加目录 · {}", path.display()));
         Ok(())
+    }
+
+    pub(crate) fn remove_music_dir(&mut self, index: usize) {
+        if self.cfg.music_dirs.len() <= 1 {
+            self.notify("至少保留一个音乐目录喵");
+            return;
+        }
+        if index >= self.cfg.music_dirs.len() {
+            return;
+        }
+        let removed = self.cfg.music_dirs.remove(index);
+        self.dir_selected = self.dir_selected.min(self.cfg.music_dirs.len() - 1);
+        if let Err(err) = self.cfg.save() {
+            self.notify(format!("保存目录失败：{err}"));
+            return;
+        }
+        self.rescan();
+        self.notify(format!("已移除目录 · {removed}"));
     }
 
     pub(crate) fn export_queue(&mut self) {
@@ -549,7 +581,12 @@ impl App {
             self.notify("没有可以导出的歌曲喵");
             return;
         }
-        let path = std::path::PathBuf::from(&self.cfg.music_dir).join("neko-歌单.m3u");
+        let dir = self
+            .roots()
+            .into_iter()
+            .next()
+            .unwrap_or_else(config::default_music_dir);
+        let path = dir.join("neko-歌单.m3u");
         match library::write_m3u(&path, &tracks) {
             Ok(()) => self.notify(format!("已导出 {} 首 · {}", tracks.len(), path.display())),
             Err(err) => self.notify(format!("导出失败：{err}")),
@@ -565,7 +602,13 @@ impl App {
         self.capture_key = false;
         match modal {
             Modal::Search => self.input = self.filter.clone(),
-            Modal::Directory => self.input = self.cfg.music_dir.clone(),
+            Modal::Directory => {
+                self.dir_selected = self
+                    .dir_selected
+                    .min(self.cfg.music_dirs.len().saturating_sub(1));
+                self.input.clear();
+            }
+            Modal::DirAdd => self.input.clear(),
             Modal::Settings => {
                 self.setting_selected = self.setting_selected.min(self.settings_rows().len() - 1);
                 self.input.clear();
@@ -653,6 +696,8 @@ impl App {
             self.modal = None;
             self.input.clear();
             self.modal_scroll = 0;
+        } else if self.modal == Some(Modal::DirAdd) {
+            self.open_modal(Modal::Directory);
         } else {
             self.close_modal();
         }
@@ -676,17 +721,17 @@ impl App {
                 }
                 self.close_modal();
             }
-            Modal::Directory => {
+            Modal::DirAdd => {
                 let raw = self.input.trim().to_string();
                 if raw.is_empty() {
                     self.notify("目录不能为空喵");
                     return;
                 }
-                if let Err(err) = self.set_music_dir(&raw) {
+                if let Err(err) = self.add_music_dir(&raw) {
                     self.notify(err);
                     return;
                 }
-                self.close_modal();
+                self.open_modal(Modal::Directory);
             }
             Modal::Seek => {
                 let Some((seconds, absolute)) = parse_position(&self.input) else {
@@ -851,7 +896,7 @@ impl App {
     }
 
     pub(crate) fn folder_list(&self) -> Vec<(String, usize)> {
-        library::folders(&self.tracks, Path::new(&self.cfg.music_dir))
+        library::folders(&self.tracks, &self.roots())
     }
 
     pub(crate) fn folder_move(&mut self, delta: isize) {
@@ -884,11 +929,11 @@ impl App {
     }
 
     pub(crate) fn browse_list(&self) -> Vec<(String, String, usize)> {
-        let root = std::path::Path::new(&self.cfg.music_dir);
+        let roots = self.roots();
         if self.browse_artist {
-            library::artist_groups(&self.tracks, root)
+            library::artist_groups(&self.tracks, &roots)
         } else {
-            library::album_groups(&self.tracks, root)
+            library::album_groups(&self.tracks, &roots)
         }
     }
 
@@ -1198,7 +1243,14 @@ impl App {
             _ => "关闭".into(),
         };
         vec![
-            ("音乐目录".into(), self.cfg.music_dir.clone()),
+            (
+                "音乐目录".into(),
+                if self.cfg.music_dirs.len() == 1 {
+                    self.cfg.music_dirs[0].clone()
+                } else {
+                    format!("{} 个目录", self.cfg.music_dirs.len())
+                },
+            ),
             (
                 "音量".into(),
                 if state.mute {

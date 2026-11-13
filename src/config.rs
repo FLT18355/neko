@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -10,10 +10,28 @@ pub struct Playlist {
     pub songs: Vec<String>,
 }
 
+fn one_or_many<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Paths {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Paths::deserialize(deserializer)? {
+        Paths::One(path) => vec![path],
+        Paths::Many(paths) => paths,
+    })
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    pub music_dir: String,
+    // 旧版本只存单个 music_dir；别名让老配置自动迁移成列表。
+    #[serde(alias = "music_dir", deserialize_with = "one_or_many")]
+    pub music_dirs: Vec<String>,
     pub volume: f64,
     pub speed: f64,
     pub mode: String,
@@ -35,7 +53,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            music_dir: String::new(),
+            music_dirs: Vec::new(),
             volume: 70.0,
             speed: 1.0,
             mode: "loop".into(),
@@ -157,6 +175,16 @@ impl Playlist {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn music_dirs_accept_legacy_single_path() {
+        let legacy: Config = serde_json::from_str(r#"{"music_dir":"/old/music"}"#).unwrap();
+        assert_eq!(legacy.music_dirs, vec!["/old/music"]);
+        let many: Config = serde_json::from_str(r#"{"music_dirs":["/a","/b"]}"#).unwrap();
+        assert_eq!(many.music_dirs, vec!["/a", "/b"]);
+        let empty: Config = serde_json::from_str("{}").unwrap();
+        assert!(empty.music_dirs.is_empty());
+    }
 
     #[test]
     fn playlist_adds_once_and_removes() {

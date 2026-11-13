@@ -213,6 +213,55 @@ pub fn shade(color: Rgb) -> Rgb {
     )
 }
 
+fn luma(color: Rgb) -> i32 {
+    (color.0 as i32 * 299 + color.1 as i32 * 587 + color.2 as i32 * 114) / 1000
+}
+
+/// 循环取用的强调色，让列表、标签和按钮各自有色。
+pub fn accent(index: usize) -> Rgb {
+    let palette = palette();
+    let colors = [
+        palette.pink,
+        palette.mauve,
+        palette.lavender,
+        palette.peach,
+        palette.yellow,
+        palette.maroon,
+        palette.rosewater,
+    ];
+    colors[index % colors.len()]
+}
+
+/// 彩虹渐变，ratio 取 0..1。
+pub fn rainbow(ratio: f64) -> Rgb {
+    let palette = palette();
+    let stops = [
+        palette.pink,
+        palette.peach,
+        palette.yellow,
+        palette.lavender,
+        palette.mauve,
+        palette.pink,
+    ];
+    let scaled = ratio.clamp(0.0, 1.0) * (stops.len() - 1) as f64;
+    let index = (scaled as usize).min(stops.len() - 2);
+    let local = scaled - index as f64;
+    let (from, to) = (stops[index], stops[index + 1]);
+    (
+        (from.0 as f64 + (to.0 as f64 - from.0 as f64) * local) as u8,
+        (from.1 as f64 + (to.1 as f64 - from.1 as f64) * local) as u8,
+        (from.2 as f64 + (to.2 as f64 - from.2 as f64) * local) as u8,
+    )
+}
+
+/// 彩色背景上的文字色，取对比度最高的前景。
+pub fn ink_on(color: Rgb) -> Rgb {
+    [palette().base, palette().crust, palette().text]
+        .into_iter()
+        .max_by_key(|candidate| (luma(*candidate) - luma(color)).abs())
+        .unwrap_or(palette().text)
+}
+
 pub fn base() -> Rgb {
     palette().base
 }
@@ -270,6 +319,14 @@ mod tests {
         assert_eq!(set("nope"), "mocha");
         assert_eq!(set("latte"), "latte");
         assert_eq!(label(), "Latte");
+    }
+
+    #[test]
+    fn accents_cycle_and_rainbow_ends_at_pink() {
+        let first = accent(0);
+        assert_eq!(accent(7), first);
+        assert_eq!(rainbow(0.0), rainbow(1.0));
+        assert!(rainbow(0.3) != rainbow(0.7));
     }
 
     #[test]

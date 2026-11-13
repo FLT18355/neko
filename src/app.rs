@@ -36,6 +36,7 @@ pub(crate) enum Modal {
     Info,
     Search,
     Directory,
+    DirAdd,
     Seek,
     Settings,
     Folders,
@@ -86,6 +87,7 @@ pub struct App {
     pub(crate) stat_at: Instant,
     pub(crate) folder: String,
     pub(crate) folder_selected: usize,
+    pub(crate) dir_selected: usize,
     pub(crate) group: String,
     pub(crate) browse_selected: usize,
     pub(crate) browse_artist: bool,
@@ -165,9 +167,12 @@ impl App {
         cache: Cache,
         mut mpv: Mpv,
         mut tracks: Vec<Track>,
-        dir: PathBuf,
+        dirs: Vec<PathBuf>,
     ) -> Self {
-        cfg.music_dir = dir.to_string_lossy().to_string();
+        cfg.music_dirs = dirs
+            .iter()
+            .map(|dir| dir.to_string_lossy().to_string())
+            .collect();
         if !MODES.contains(&cfg.mode.as_str()) {
             cfg.mode = "loop".into();
         }
@@ -255,6 +260,7 @@ impl App {
             stat_at: Instant::now(),
             folder: cached_folder,
             folder_selected: 0,
+            dir_selected: 0,
             group: cached_group,
             browse_selected: 0,
             browse_artist: false,
@@ -519,10 +525,22 @@ impl App {
         self.mpv.quit();
     }
 
+    pub(crate) fn roots(&self) -> Vec<PathBuf> {
+        self.cfg
+            .music_dirs
+            .iter()
+            .map(|dir| config::expand_path(dir))
+            .collect()
+    }
+
+    pub(crate) fn relative_folder(&self, path: &std::path::Path) -> String {
+        library::relative_folder(path, &self.roots())
+    }
+
     pub(crate) fn rebuild_visible(&mut self) {
         let needle = self.filter.to_lowercase();
         let view = self.view.clone();
-        let root = std::path::Path::new(&self.cfg.music_dir);
+        let roots = self.roots();
         let mut visible = Vec::new();
         for (index, track) in self.tracks.iter().enumerate() {
             let in_view = match view.as_str() {
@@ -532,9 +550,9 @@ impl App {
                     .recent
                     .iter()
                     .any(|path| path == &track.path.to_string_lossy()),
-                "folder" => library::group_key(&track.path, root, false) == self.folder,
-                "album" => library::group_key(&track.path, root, false) == self.group,
-                "artist" => library::group_key(&track.path, root, true) == self.group,
+                "folder" => library::group_key(&track.path, &roots, false) == self.folder,
+                "album" => library::group_key(&track.path, &roots, false) == self.group,
+                "artist" => library::group_key(&track.path, &roots, true) == self.group,
                 _ => true,
             };
             if in_view

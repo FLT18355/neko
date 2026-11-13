@@ -681,6 +681,7 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                             (app.playlist_song_selected + 1).min(count.saturating_sub(1));
                     }
                     crate::app::Modal::Folders => app.folder_move(1),
+                    crate::app::Modal::Directory => app.dir_move(1),
                     crate::app::Modal::Browse => app.browse_move(1),
                     crate::app::Modal::Equalizer => {
                         app.eq_selected = (app.eq_selected + 1).min(crate::app::EQ_BANDS.len());
@@ -720,6 +721,7 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                         app.playlist_song_selected = app.playlist_song_selected.saturating_sub(1);
                     }
                     crate::app::Modal::Folders => app.folder_move(-1),
+                    crate::app::Modal::Directory => app.dir_move(-1),
                     crate::app::Modal::Browse => app.browse_move(-1),
                     crate::app::Modal::Equalizer => {
                         app.eq_selected = app.eq_selected.saturating_sub(1);
@@ -800,6 +802,9 @@ fn select_modal_row(app: &mut crate::app::App, index: usize) {
         Some(Modal::Folders) => {
             app.folder_selected = index.min(app.folder_list().len().saturating_sub(1));
         }
+        Some(Modal::Directory) => {
+            app.dir_selected = index.min(app.cfg.music_dirs.len().saturating_sub(1));
+        }
         Some(Modal::Browse) => {
             app.browse_selected = index.min(app.browse_list().len().saturating_sub(1));
         }
@@ -827,6 +832,7 @@ fn select_modal_row(app: &mut crate::app::App, index: usize) {
 fn activate_modal_row(app: &mut crate::app::App) {
     match app.modal {
         Some(Modal::Folders) => app.select_folder(),
+        Some(Modal::Directory) => app.rescan(),
         Some(Modal::Browse) => app.select_browse(),
         Some(Modal::Playlists) => app.open_playlist_tracks(),
         Some(Modal::PlaylistTracks) => app.play_playlist(app.playlist_song_selected),

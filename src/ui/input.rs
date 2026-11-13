@@ -55,9 +55,24 @@ fn handle_modal(app: &mut App, key: KeyEvent) {
         handle_keybindings(app, key);
         return;
     }
+    if modal == Modal::Directory {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
+            KeyCode::Up | KeyCode::Char('k') => app.dir_move(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.dir_move(1),
+            KeyCode::Char('a') => app.open_modal(Modal::DirAdd),
+            KeyCode::Char('x') | KeyCode::Char('d') => {
+                let index = app.dir_selected;
+                app.remove_music_dir(index);
+            }
+            KeyCode::Char('r') | KeyCode::Enter => app.rescan(),
+            _ => {}
+        }
+        return;
+    }
     let editing = matches!(
         modal,
-        Modal::Search | Modal::Directory | Modal::Seek | Modal::PlaylistName
+        Modal::Search | Modal::DirAdd | Modal::Seek | Modal::PlaylistName
     );
     if editing {
         match key.code {

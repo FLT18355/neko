@@ -52,6 +52,14 @@ pub fn draw_full_lyrics(
         .get("artist")
         .filter(|value| !value.is_empty())
         .cloned();
+    let clock = format!("{} {}", CLOCK, crate::clock::now());
+    let clock_width = text_width(&clock);
+    canvas.put(
+        width.saturating_sub(clock_width + 2),
+        0,
+        &clock,
+        Style::new(peach(), base()).bold(),
+    );
     canvas.centered(
         1,
         &truncate(&title, width.saturating_sub(4)),
@@ -189,12 +197,13 @@ pub fn draw_modal(
             hover,
             hits,
         ),
-        Modal::Directory => draw_input(
+        Modal::Directory => draw_dirs(canvas, app, hover, hits),
+        Modal::DirAdd => draw_input(
             canvas,
             app,
-            "默认音乐目录",
+            "添加音乐目录",
             "目录路径（Ctrl+U 清空）",
-            "Enter 设为默认目录 · Esc 取消",
+            "Enter 添加 · Esc 取消",
             hover,
             hits,
         ),
@@ -328,7 +337,7 @@ fn draw_help(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<
             tx,
             ty,
             &format!("{:<12}", truncate(key, 11)),
-            Style::new(lavender(), mantle()).bold(),
+            Style::new(accent(index), mantle()).bold(),
         );
         canvas.put(
             tx + 13,
@@ -763,6 +772,73 @@ fn draw_playlist_tracks(
         button_x,
         y + height - 2,
         limit,
+        ModalButton::Close,
+        hover,
+        hits,
+    );
+}
+
+fn draw_dirs(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
+    let dirs = app.dir_list();
+    let width = 88;
+    let height = canvas.height().saturating_sub(4).clamp(8, 24);
+    let (x, y, width, height) = frame(canvas, width, height, "音乐目录", hits);
+    let rows = height.saturating_sub(4);
+    if dirs.is_empty() {
+        canvas.put(
+            x + 2,
+            y + 2,
+            "还没有目录喵，按 a 添加一个",
+            Style::new(overlay0(), mantle()),
+        );
+    } else {
+        let offset = app
+            .dir_selected
+            .saturating_sub(rows / 2)
+            .min(dirs.len().saturating_sub(rows));
+        for (row, dir) in dirs.iter().skip(offset).take(rows).enumerate() {
+            let index = offset + row;
+            let selected = index == app.dir_selected;
+            let row_hover = hover == Some(Hit::ModalRow(index));
+            let row_y = y + 2 + row;
+            let background = if selected {
+                surface0()
+            } else if row_hover {
+                mix(mantle(), surface0(), 0.5)
+            } else {
+                mantle()
+            };
+            if selected || row_hover {
+                canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), background));
+            }
+            canvas.put(
+                x + 2,
+                row_y,
+                &format!("{:>2}", index + 1),
+                Style::new(accent(index), background).bold(),
+            );
+            let marker = if index == 0 { HEART } else { " " };
+            canvas.put(x + 5, row_y, marker, Style::new(pink(), background));
+            canvas.put(
+                x + 7,
+                row_y,
+                &truncate(dir, width.saturating_sub(9)),
+                Style::new(if selected { selected_fg() } else { txt() }, background),
+            );
+            hits.push((Hit::ModalRow(index), Rect::new(x + 1, row_y, width - 2, 1)));
+        }
+    }
+    canvas.put(
+        x + 2,
+        y + height - 2,
+        "↑/↓ 选择 · a 添加 · x 移除 · r 重新扫描",
+        Style::new(overlay0(), mantle()),
+    );
+    let _ = modal_button(
+        canvas,
+        x + width.saturating_sub(12),
+        y + height - 2,
+        x + width - 2,
         ModalButton::Close,
         hover,
         hits,
@@ -1345,7 +1421,7 @@ fn draw_settings(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut 
         let label_style = if selected {
             Style::new(pink(), background).bold()
         } else {
-            Style::new(sub1(), background)
+            Style::new(accent(index), background)
         };
         canvas.put(x + 2, row_y, label, label_style);
         let arrows_width = 8;

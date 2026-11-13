@@ -280,7 +280,7 @@ impl Action {
             Action::Browse => "专辑 / 艺术家浏览",
             Action::CycleView => "循环切换视图",
             Action::Search => "搜索曲目",
-            Action::Directory => "更换音乐目录",
+            Action::Directory => "音乐目录列表",
             Action::Settings => "打开设置",
             Action::Rescan => "重新扫描目录",
             Action::Sort => "切换排序",

@@ -22,9 +22,14 @@ pub fn is_audio(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-pub fn scan(dir: &Path) -> Vec<Track> {
+pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Track> {
     let mut tracks = Vec::new();
-    walk(dir, &mut tracks);
+    for dir in dirs {
+        walk(dir, &mut tracks);
+    }
+    // 多个目录可能重叠（父目录 + 子目录），按路径去重。
+    let mut seen = std::collections::HashSet::new();
+    tracks.retain(|track| seen.insert(track.path.clone()));
     tracks
 }
 
@@ -104,23 +109,30 @@ pub fn human_duration(seconds: f64) -> String {
     }
 }
 
-pub fn folders(tracks: &[Track], root: &Path) -> Vec<(String, usize)> {
-    let mut map: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-    for track in tracks {
-        *map.entry(relative_folder(&track.path, root)).or_insert(0) += 1;
-    }
-    map.into_iter().collect()
-}
-
-fn relative_folder(path: &Path, root: &Path) -> String {
-    path.parent()
-        .and_then(|parent| parent.strip_prefix(root).ok())
+/// 目录相对于哪个音乐根目录：取最长的匹配根，避免嵌套目录归组到父级。
+pub fn relative_folder(path: &Path, roots: &[PathBuf]) -> String {
+    let Some(parent) = path.parent() else {
+        return String::new();
+    };
+    roots
+        .iter()
+        .filter(|root| parent.starts_with(root))
+        .max_by_key(|root| root.as_os_str().len())
+        .and_then(|root| parent.strip_prefix(root).ok())
         .map(|path| path.to_string_lossy().replace('\\', "/"))
         .unwrap_or_default()
 }
 
-pub fn group_key(path: &Path, root: &Path, artist: bool) -> String {
-    let folder = relative_folder(path, root);
+pub fn folders(tracks: &[Track], roots: &[PathBuf]) -> Vec<(String, usize)> {
+    let mut map: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for track in tracks {
+        *map.entry(relative_folder(&track.path, roots)).or_insert(0) += 1;
+    }
+    map.into_iter().collect()
+}
+
+pub fn group_key(path: &Path, roots: &[PathBuf], artist: bool) -> String {
+    let folder = relative_folder(path, roots);
     if artist {
         folder.split('/').next().unwrap_or("").to_string()
     } else {
@@ -128,10 +140,10 @@ pub fn group_key(path: &Path, root: &Path, artist: bool) -> String {
     }
 }
 
-pub fn album_groups(tracks: &[Track], root: &Path) -> Vec<(String, String, usize)> {
+pub fn album_groups(tracks: &[Track], roots: &[PathBuf]) -> Vec<(String, String, usize)> {
     let mut map: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for track in tracks {
-        *map.entry(relative_folder(&track.path, root)).or_insert(0) += 1;
+        *map.entry(relative_folder(&track.path, roots)).or_insert(0) += 1;
     }
     map.into_iter()
         .map(|(key, count)| {
@@ -146,10 +158,10 @@ pub fn album_groups(tracks: &[Track], root: &Path) -> Vec<(String, String, usize
         .collect()
 }
 
-pub fn artist_groups(tracks: &[Track], root: &Path) -> Vec<(String, String, usize)> {
+pub fn artist_groups(tracks: &[Track], roots: &[PathBuf]) -> Vec<(String, String, usize)> {
     let mut map: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for track in tracks {
-        *map.entry(group_key(&track.path, root, true)).or_insert(0) += 1;
+        *map.entry(group_key(&track.path, roots, true)).or_insert(0) += 1;
     }
     map.into_iter()
         .map(|(key, count)| {
@@ -187,9 +199,11 @@ mod tests {
         fs::write(dir.join("子目录/b.FLAC"), b"x").unwrap();
         fs::write(dir.join("cover.jpg"), b"x").unwrap();
         fs::write(dir.join(".hidden.mp3"), b"x").unwrap();
-        let tracks = scan(&dir);
+        let tracks = scan_dirs(std::slice::from_ref(&dir));
         assert_eq!(tracks.len(), 2);
         assert!(tracks.iter().any(|t| t.title == "b"));
+        let nested = scan_dirs(&[dir.clone(), dir.join("子目录")]);
+        assert_eq!(nested.len(), 2, "重叠目录不应重复收录");
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -221,7 +235,7 @@ mod tests {
 
     #[test]
     fn groups_tracks_by_relative_folder() {
-        let root = Path::new("/music");
+        let roots = [PathBuf::from("/music")];
         let track = |path: &str| Track {
             path: PathBuf::from(path),
             title: String::new(),
@@ -233,7 +247,7 @@ mod tests {
             track("/music/rock/c.mp3"),
             track("/music/jazz/d.mp3"),
         ];
-        let folders = folders(&tracks, root);
+        let folders = folders(&tracks, &roots);
         assert_eq!(
             folders,
             vec![
@@ -246,7 +260,7 @@ mod tests {
 
     #[test]
     fn groups_albums_and_artists_by_folder_hierarchy() {
-        let root = Path::new("/music");
+        let roots = [PathBuf::from("/music")];
         let track = |path: &str| Track {
             path: PathBuf::from(path),
             title: String::new(),
@@ -258,7 +272,7 @@ mod tests {
             track("/music/Artist/Other/c.mp3"),
         ];
         assert_eq!(
-            album_groups(&tracks, root),
+            album_groups(&tracks, &roots),
             vec![
                 ("".to_string(), "根目录".to_string(), 1),
                 ("Artist/Album".to_string(), "Artist · Album".to_string(), 1),
@@ -266,19 +280,27 @@ mod tests {
             ]
         );
         assert_eq!(
-            artist_groups(&tracks, root),
+            artist_groups(&tracks, &roots),
             vec![
                 ("".to_string(), "根目录".to_string(), 1),
                 ("Artist".to_string(), "Artist".to_string(), 2),
             ]
         );
         assert_eq!(
-            group_key(Path::new("/music/Artist/Album/b.mp3"), root, false),
+            group_key(Path::new("/music/Artist/Album/b.mp3"), &roots, false),
             "Artist/Album"
         );
         assert_eq!(
-            group_key(Path::new("/music/Artist/Album/b.mp3"), root, true),
+            group_key(Path::new("/music/Artist/Album/b.mp3"), &roots, true),
             "Artist"
         );
+    }
+
+    #[test]
+    fn nested_root_wins_for_grouping() {
+        let roots = [PathBuf::from("/music"), PathBuf::from("/music/rock")];
+        let path = PathBuf::from("/music/rock/album/a.mp3");
+        assert_eq!(relative_folder(&path, &roots), "album");
+        assert_eq!(group_key(&path, &roots, true), "album");
     }
 }
