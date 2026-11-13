@@ -310,6 +310,37 @@ pub fn default_keys(action: Action) -> Vec<&'static str> {
         .collect()
 }
 
+/// SHIFT+符号按 US 布局换算，兼容只上报基础键码的终端。
+fn shifted_symbol(ch: char, modifiers: KeyModifiers) -> char {
+    if !modifiers.contains(KeyModifiers::SHIFT) {
+        return ch;
+    }
+    match ch {
+        '`' => '~',
+        '1' => '!',
+        '2' => '@',
+        '3' => '#',
+        '4' => '$',
+        '5' => '%',
+        '6' => '^',
+        '7' => '&',
+        '8' => '*',
+        '9' => '(',
+        '0' => ')',
+        '-' => '_',
+        '=' => '+',
+        '[' => '{',
+        ']' => '}',
+        '\\' => '|',
+        ';' => ':',
+        '\'' => '"',
+        ',' => '<',
+        '.' => '>',
+        '/' => '?',
+        _ => ch,
+    }
+}
+
 pub fn key_name(key: KeyEvent) -> Option<String> {
     let mut mods = String::new();
     if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -320,13 +351,14 @@ pub fn key_name(key: KeyEvent) -> Option<String> {
     }
     let base = match key.code {
         KeyCode::Char(' ') => "space".to_string(),
-        KeyCode::Char(ch) if ch.is_alphanumeric() => {
-            if ch.is_uppercase() && !mods.contains("shift+") {
+        KeyCode::Char(ch) if ch.is_alphabetic() => {
+            // 部分终端（kitty 键盘协议）上报小写字母 + SHIFT，不能只看大小写。
+            if ch.is_uppercase() || key.modifiers.contains(KeyModifiers::SHIFT) {
                 mods.push_str("shift+");
             }
             ch.to_lowercase().to_string()
         }
-        KeyCode::Char(ch) => ch.to_string(),
+        KeyCode::Char(ch) => shifted_symbol(ch, key.modifiers).to_string(),
         KeyCode::Enter => "enter".into(),
         KeyCode::Esc => "esc".into(),
         KeyCode::Tab => "tab".into(),
@@ -371,7 +403,10 @@ mod tests {
     fn names_special_and_shifted_keys() {
         assert_eq!(name(KeyCode::Char(' '), KeyModifiers::NONE), "space");
         assert_eq!(name(KeyCode::Char('G'), KeyModifiers::SHIFT), "shift+g");
+        assert_eq!(name(KeyCode::Char('l'), KeyModifiers::SHIFT), "shift+l");
         assert_eq!(name(KeyCode::Char('?'), KeyModifiers::SHIFT), "?");
+        assert_eq!(name(KeyCode::Char('/'), KeyModifiers::SHIFT), "?");
+        assert_eq!(name(KeyCode::Char('1'), KeyModifiers::SHIFT), "!");
         assert_eq!(name(KeyCode::Left, KeyModifiers::SHIFT), "shift+left");
         assert_eq!(name(KeyCode::PageDown, KeyModifiers::NONE), "pagedown");
     }
