@@ -73,13 +73,27 @@ pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
         &library_title,
         Style::new(surface1(), mantle()),
     );
+    let playing_title = format!("{} 正在播放", PAW);
     canvas.border(
         right_x,
         body_y,
         right_width,
         panel_height,
-        &format!("{} 正在播放", PAW),
+        &playing_title,
         Style::new(surface1(), mantle()),
+    );
+    // 面板标题用主题粉色加粗，和弹窗边框标题一致
+    canvas.put(
+        left_x + 2,
+        body_y,
+        &truncate(&format!(" {library_title} "), left_width.saturating_sub(4)),
+        Style::new(pink(), mantle()).bold(),
+    );
+    canvas.put(
+        right_x + 2,
+        body_y,
+        &truncate(&format!(" {playing_title} "), right_width.saturating_sub(4)),
+        Style::new(pink(), mantle()).bold(),
     );
 
     draw_library(
@@ -272,25 +286,31 @@ fn draw_library(
             },
             Style::new(if selected { pink() } else { mauve() }, background),
         );
-        canvas.put(
-            x + 1,
-            y,
-            if playing { NOTE } else { " " },
-            Style::new(pink(), background).bold(),
-        );
-        canvas.put(
-            x + 3,
-            y,
-            &format!("{:>3}", index + 1),
-            Style::new(overlay0(), background),
-        );
+        // 播放中的行用四帧小电平跳动代替静态音符
+        let meter = if playing && !app.mpv.state.pause {
+            const STEP: [&str; 4] = ["▁", "▃", "▅", "▇"];
+            STEP[(app.cache.total_seconds * 4.0) as usize % STEP.len()]
+        } else if playing {
+            NOTE
+        } else {
+            " "
+        };
+        canvas.put(x + 1, y, meter, Style::new(pink(), background).bold());
+        let index_style = if playing {
+            Style::new(pink(), background).bold()
+        } else if selected {
+            Style::new(accent(index), background).bold()
+        } else {
+            Style::new(overlay0(), background)
+        };
+        canvas.put(x + 3, y, &format!("{:>3}", index + 1), index_style);
         if app.cfg.is_favorite(&track.path) {
             canvas.put(x + 7, y, HEART, Style::new(maroon(), background));
         }
         let rating = app.rating_of(&track.path);
         if rating > 0 {
             canvas.put(
-                x + 8,
+                x + 9,
                 y,
                 &format!("★{rating}"),
                 Style::new(yellow(), background),
@@ -310,8 +330,19 @@ fn draw_library(
         } else {
             0
         };
-        let title_x = x + 11;
-        let title_width = width.saturating_sub(13 + play_width.saturating_add(2));
+        let ext_text = track
+            .path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("")
+            .to_uppercase();
+        let badge_width = if width >= 54 && play_width > 0 && !ext_text.is_empty() {
+            text_width(&ext_text) + 1
+        } else {
+            0
+        };
+        let title_x = x + 12;
+        let title_width = width.saturating_sub(14 + play_width.saturating_add(2) + badge_width);
         canvas.put(
             title_x,
             y,
@@ -326,14 +357,22 @@ fn draw_library(
                 Style::new(if playing { pink() } else { surface2() }, background),
             );
         }
+        if badge_width > 0 {
+            canvas.put(
+                x + width - play_width - 2 - badge_width,
+                y,
+                &ext_text,
+                Style::new(surface2(), background),
+            );
+        }
         let folder = app.relative_folder(&track.path);
         if !folder.is_empty() {
             let text = format!(" {folder}");
             let text = truncate(&text, title_width / 3);
             let folder_width = text_width(&text);
-            if folder_width + play_width + 12 < width {
+            if folder_width + play_width + badge_width + 12 < width {
                 canvas.put(
-                    x + width - play_width - folder_width - 3,
+                    x + width - play_width - folder_width - badge_width - 3,
                     y,
                     &text,
                     Style::new(mix(overlay0(), accent(index + 2), 0.55), background),
@@ -594,6 +633,23 @@ fn draw_now_playing(
                 &percent_text,
                 Style::new(surface2(), mantle()),
             );
+        }
+        // 时间与百分比之间的空档塞一排迷你频谱，和全屏 cava 呼应
+        let meter_x = x + clock_width + 2;
+        let meter_width = percent_x.saturating_sub(meter_x + 2).min(24);
+        if meter_width >= 8 {
+            const LEVELS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+            let bars = meter_width / 2;
+            for bar in 0..bars {
+                let band = bar * crate::viz::BANDS / bars.max(1);
+                let level = f64::from(app.viz[band.min(crate::viz::BANDS - 1)]);
+                canvas.put(
+                    meter_x + bar * 2,
+                    y,
+                    LEVELS[(level * 7.0).round() as usize],
+                    Style::new(mix(mauve(), peach(), level), mantle()),
+                );
+            }
         }
 
         let back_x = x + width.saturating_sub(11);
