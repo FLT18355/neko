@@ -185,15 +185,27 @@ fn handle_modal(app: &mut App, key: KeyEvent) {
         },
         Modal::Queue => match key.code {
             KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Char('k') | KeyCode::Char('K')
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+            {
+                app.queue_move(-1);
+            }
+            KeyCode::Char('j') | KeyCode::Char('J')
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+            {
+                app.queue_move(1);
+            }
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
                 app.queue_selected = app.queue_selected.saturating_sub(1);
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
                 app.queue_selected =
                     (app.queue_selected + 1).min(app.session.len().saturating_sub(1));
             }
-            KeyCode::Char('K') => app.queue_move(-1),
-            KeyCode::Char('J') => app.queue_move(1),
             KeyCode::Char('d') => app.queue_remove(),
             KeyCode::Char('x') => app.queue_clear(),
             KeyCode::Enter => app.play_queue_index(app.queue_selected),

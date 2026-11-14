@@ -52,7 +52,7 @@ pub fn draw_full_lyrics(
             "没有正在播放的曲目喵",
             Style::new(overlay0(), base()),
         );
-        let back = "F 或 Esc 返回";
+        let back = "Ctrl+F 或 Esc 返回";
         canvas.centered(
             height.saturating_sub(2),
             back,
@@ -169,7 +169,12 @@ pub fn draw_full_lyrics(
             let clock_x = right_x + right_width.saturating_sub(clock_width) / 2;
             for (row, text) in rows.iter().enumerate() {
                 let color = mix(peach(), pink(), row as f64 / 4.0);
-                canvas.put(clock_x, clock_y + row, text, Style::new(color, base()).bold());
+                canvas.put(
+                    clock_x,
+                    clock_y + row,
+                    text,
+                    Style::new(color, base()).bold(),
+                );
             }
         } else {
             let compact = truncate(&format!("{} {}", CLOCK, crate::clock::now()), right_width);
@@ -218,9 +223,9 @@ pub fn draw_full_lyrics(
         Rect::new(bar_x, height.saturating_sub(2), text_width(&stamp), 1),
     ));
     let hint = if state.pause {
-        "已暂停 · 空格继续 · F / Esc 返回"
+        "已暂停 · 空格继续 · Ctrl+F / Esc 返回"
     } else {
-        "空格暂停 · n / p 切歌 · F / Esc 返回"
+        "空格暂停 · n / p 切歌 · Ctrl+F / Esc 返回"
     };
     let hint_width = text_width(hint);
     let hint_x = width.saturating_sub(hint_width + 2);

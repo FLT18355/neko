@@ -472,7 +472,7 @@ impl App {
     pub(crate) fn toggle_full_lyrics(&mut self) {
         self.lyrics_full = !self.lyrics_full;
         self.notify(if self.lyrics_full {
-            "全屏歌词 · F 或 Esc 返回"
+            "全屏歌词 · Ctrl+F 或 Esc 返回"
         } else {
             "退出全屏歌词"
         });
