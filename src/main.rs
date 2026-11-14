@@ -8,6 +8,7 @@ mod lyrics;
 mod mpv;
 mod theme;
 mod ui;
+mod viz;
 
 use app::App;
 use cache::Cache;
@@ -111,7 +112,10 @@ fn main() {
             eprintln!("绘制界面失败：{err}");
             break;
         }
-        if event::poll(Duration::from_millis(120)).unwrap_or(false) {
+        // 播放时 25 帧/秒让频谱顺滑，暂停/空闲时降回 5 帧/秒省 CPU
+        let idle = app.mpv.state.path.is_none() || app.mpv.state.pause;
+        let wait = if idle { 200 } else { 40 };
+        if event::poll(Duration::from_millis(wait)).unwrap_or(false) {
             match event::read() {
                 Ok(Event::Key(key)) if key.kind != KeyEventKind::Release => {
                     ui::handle_key(&mut app, &mut ui_state, key);

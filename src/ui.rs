@@ -2,7 +2,10 @@ mod draw;
 mod input;
 
 use crossterm::cursor::{Hide, Show};
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use crossterm::event::{
+    DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
+};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -457,12 +460,25 @@ impl Terminal {
         std::panic::set_hook(Box::new(move |info| {
             let _ = disable_raw_mode();
             let mut stdout = io::stdout();
-            let _ = execute!(stdout, Show, DisableMouseCapture, LeaveAlternateScreen);
+            let _ = execute!(
+                stdout,
+                PopKeyboardEnhancementFlags,
+                Show,
+                DisableMouseCapture,
+                LeaveAlternateScreen
+            );
             previous(info);
         }));
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, Hide, EnableMouseCapture)?;
+        // 先关掉 xterm modifyOtherKeys（crossterm 解析不了 CSI 27;2;code~，Shift 键会整个丢失），
+        // 再请求 kitty 键盘协议，让 Shift+字母以 CSI u 上报；不支持的终端会忽略。
+        let _ = stdout.write_all(b"\x1b[>4;0m");
+        let _ = execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
         Ok(Self {
             stdout,
             title: String::new(),
@@ -499,7 +515,13 @@ impl Terminal {
     }
 
     pub fn leave(&mut self) {
-        let _ = execute!(self.stdout, Show, DisableMouseCapture, LeaveAlternateScreen);
+        let _ = execute!(
+            self.stdout,
+            PopKeyboardEnhancementFlags,
+            Show,
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
         let _ = disable_raw_mode();
     }
 }

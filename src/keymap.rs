@@ -403,6 +403,7 @@ mod tests {
     fn names_special_and_shifted_keys() {
         assert_eq!(name(KeyCode::Char(' '), KeyModifiers::NONE), "space");
         assert_eq!(name(KeyCode::Char('G'), KeyModifiers::SHIFT), "shift+g");
+        assert_eq!(name(KeyCode::Char('F'), KeyModifiers::NONE), "shift+f");
         assert_eq!(name(KeyCode::Char('l'), KeyModifiers::SHIFT), "shift+l");
         assert_eq!(name(KeyCode::Char('?'), KeyModifiers::SHIFT), "?");
         assert_eq!(name(KeyCode::Char('/'), KeyModifiers::SHIFT), "?");

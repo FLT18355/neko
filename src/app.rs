@@ -99,6 +99,8 @@ pub struct App {
     pub(crate) keybind_selected: usize,
     pub(crate) capture_key: bool,
     pub(crate) bindings: HashMap<String, Action>,
+    pub(crate) viz: [f32; crate::viz::BANDS],
+    pub(crate) refreshed_at: Instant,
 }
 
 fn fade_volume(base: f64, remaining: f64) -> f64 {
@@ -233,6 +235,8 @@ impl App {
             lrc_path: None,
             lrc_offset: 0.0,
             lyrics_full: false,
+            viz: [0.0; crate::viz::BANDS],
+            refreshed_at: Instant::now(),
             a_point: None,
             b_point: None,
             sleep_at: None,
@@ -356,10 +360,17 @@ impl App {
     }
 
     pub fn tick(&mut self) {
-        self.mpv.refresh();
         let now = Instant::now();
         let delta = now.duration_since(self.stat_at).as_secs_f64().min(1.0);
         self.stat_at = now;
+        // 界面按帧刷新，mpv 属性读取仍限在 ~8 次/秒，避免 IPC 拖慢动画
+        if now.duration_since(self.refreshed_at).as_millis() >= 120 {
+            self.refreshed_at = now;
+            self.mpv.refresh();
+        }
+        let playing =
+            !self.mpv.state.pause && !self.mpv.state.idle && self.mpv.state.path.is_some();
+        crate::viz::step(&mut self.viz, playing, self.cache.total_seconds);
         if let Some(path) = self.mpv.state.path.clone()
             && !self.mpv.state.pause
             && !self.mpv.state.idle

@@ -3,6 +3,39 @@ use crate::app::{App, Modal};
 use crate::keymap::ACTIONS;
 use crate::library;
 
+const DIGITS: [[&str; 5]; 10] = [
+    ["██████", "██  ██", "██  ██", "██  ██", "██████"],
+    ["  ██  ", "████  ", "  ██  ", "  ██  ", "██████"],
+    ["██████", "    ██", "██████", "██    ", "██████"],
+    ["██████", "    ██", "██████", "    ██", "██████"],
+    ["██  ██", "██  ██", "██████", "    ██", "    ██"],
+    ["██████", "██    ", "██████", "    ██", "██████"],
+    ["██████", "██    ", "██████", "██  ██", "██████"],
+    ["██████", "    ██", "    ██", "    ██", "    ██"],
+    ["██████", "██  ██", "██████", "██  ██", "██████"],
+    ["██████", "██  ██", "██████", "    ██", "██████"],
+];
+
+/// 每格 2 列宽的方块点阵，宽 47 列；每行等宽。
+fn big_clock(stamp: &str) -> [String; 5] {
+    let mut rows: [String; 5] = std::array::from_fn(|_| String::new());
+    for (index, ch) in stamp.chars().enumerate() {
+        if index > 0 {
+            for row in &mut rows {
+                row.push(' ');
+            }
+        }
+        let slab = match ch.to_digit(10) {
+            Some(digit) => DIGITS[digit as usize],
+            None => ["  ", "██", "  ", "██", "  "],
+        };
+        for (row, part) in rows.iter_mut().zip(slab) {
+            row.push_str(part);
+        }
+    }
+    rows
+}
+
 pub fn draw_full_lyrics(
     canvas: &mut Canvas,
     app: &App,
@@ -52,43 +85,42 @@ pub fn draw_full_lyrics(
         .get("artist")
         .filter(|value| !value.is_empty())
         .cloned();
-    let clock = format!("{} {}", CLOCK, crate::clock::now());
-    let clock_width = text_width(&clock);
-    canvas.put(
-        width.saturating_sub(clock_width + 2),
-        0,
-        &clock,
-        Style::new(peach(), base()).bold(),
+
+    let bar_y = height.saturating_sub(3);
+    let bar_x = 2usize;
+    let bar_width = width.saturating_sub(4);
+    let body_bottom = bar_y.saturating_sub(1);
+
+    // 左栏：曲目信息 + 歌词
+    let left_x = 2usize;
+    let left_width = ((width * 58) / 100).clamp(28, width.saturating_sub(24));
+    let heading = format!(
+        "{} {}",
+        NOTE,
+        truncate(&title, left_width.saturating_sub(2))
     );
-    canvas.centered(
-        1,
-        &truncate(&title, width.saturating_sub(4)),
-        Style::new(pink(), base()).bold(),
-    );
+    canvas.put(left_x, 1, &heading, Style::new(pink(), base()).bold());
     if let Some(artist) = artist {
-        canvas.centered(
+        canvas.put(
+            left_x,
             2,
-            &truncate(&artist, width.saturating_sub(4)),
+            &truncate(&artist, left_width),
             Style::new(sub0(), base()),
         );
     }
     if app.lrc_offset.abs() > 0.01 {
-        canvas.put(
-            width.saturating_sub(8),
-            1,
-            &format!("{:+.1}s", app.lrc_offset),
-            Style::new(surface2(), base()),
-        );
+        let badge = format!("{:+.1}s", app.lrc_offset);
+        let x = left_x + left_width.saturating_sub(text_width(&badge));
+        canvas.put(x, 2, &badge, Style::new(surface2(), base()));
     }
 
-    let top = 4usize;
-    let footer = 4usize;
-    let area = height.saturating_sub(top + footer);
+    let head = 4usize;
+    let area = body_bottom.saturating_sub(head);
     if let Some((index, lines)) = app.current_lyric() {
         if area > 0 {
             let (start, end) = crate::lyrics::window(index, lines.len(), area);
             let count = end.saturating_sub(start);
-            let y0 = top + area.saturating_sub(count) / 2;
+            let y0 = head + area.saturating_sub(count) / 2;
             for (line_index, (_, text)) in lines.iter().enumerate().skip(start).take(count) {
                 let y = y0 + line_index - start;
                 let style = if line_index == index {
@@ -103,15 +135,52 @@ pub fn draw_full_lyrics(
                 } else {
                     text.clone()
                 };
-                canvas.centered(y, &truncate(&content, width.saturating_sub(4)), style);
+                let content = truncate(&content, left_width);
+                let x = left_x + left_width.saturating_sub(text_width(&content)) / 2;
+                canvas.put(x, y, &content, style);
             }
         }
     } else {
-        canvas.centered(
-            top + area / 2,
-            "没有找到同名的 .lrc 喵",
-            Style::new(overlay0(), base()),
-        );
+        let message = truncate("没有找到同名的 .lrc 喵", left_width);
+        let x = left_x + left_width.saturating_sub(text_width(&message)) / 2;
+        canvas.put(x, head + area / 2, &message, Style::new(overlay0(), base()));
+    }
+
+    // 三块分格：左歌词 │ 右上时钟 ─ 右下频谱
+    let right_x = left_x + left_width + 2;
+    let right_width = width.saturating_sub(right_x + 2);
+    let divider_x = left_x + left_width + 1;
+    let divider_y = 12usize.min(body_bottom.saturating_sub(3));
+    let divider_style = Style::new(surface0(), base());
+    for row in 1..body_bottom {
+        canvas.put(divider_x, row, "│", divider_style);
+    }
+    if right_width > 0 {
+        canvas.put(divider_x, divider_y, "├", divider_style);
+        for column in right_x..right_x + right_width {
+            canvas.put(column, divider_y, "─", divider_style);
+        }
+    }
+    let clock_y = 1 + divider_y.saturating_sub(6) / 2;
+    if right_width > 0 {
+        let rows = big_clock(&crate::clock::now());
+        let clock_width = text_width(&rows[0]);
+        if right_width >= clock_width {
+            let clock_x = right_x + right_width.saturating_sub(clock_width) / 2;
+            for (row, text) in rows.iter().enumerate() {
+                let color = mix(peach(), pink(), row as f64 / 4.0);
+                canvas.put(clock_x, clock_y + row, text, Style::new(color, base()).bold());
+            }
+        } else {
+            let compact = truncate(&format!("{} {}", CLOCK, crate::clock::now()), right_width);
+            let x = right_x + right_width.saturating_sub(text_width(&compact));
+            canvas.put(x, clock_y, &compact, Style::new(peach(), base()).bold());
+        }
+    }
+    let cava_top = divider_y + 1;
+    let cava_height = body_bottom.saturating_sub(cava_top);
+    if right_width >= 6 && cava_height >= 2 {
+        draw_cava(canvas, app, right_x, cava_top, right_width, cava_height);
     }
 
     let time = state.time_pos.unwrap_or(0.0);
@@ -121,9 +190,6 @@ pub fn draw_full_lyrics(
     } else {
         0.0
     };
-    let bar_y = height.saturating_sub(3);
-    let bar_x = 2usize;
-    let bar_width = width.saturating_sub(4);
     let filled = (bar_width as f64 * ratio).round() as usize;
     for column in 0..bar_width {
         let local = column as f64 / bar_width.max(1) as f64;
@@ -140,16 +206,16 @@ pub fn draw_full_lyrics(
     } else {
         library::duration_text(time)
     };
-    let clock = format!("{time_label} / {}", library::duration_text(duration));
+    let stamp = format!("{time_label} / {}", library::duration_text(duration));
     canvas.put(
         bar_x,
         height.saturating_sub(2),
-        &clock,
+        &stamp,
         Style::new(sub0(), base()),
     );
     hits.push((
         Hit::Time,
-        Rect::new(bar_x, height.saturating_sub(2), text_width(&clock), 1),
+        Rect::new(bar_x, height.saturating_sub(2), text_width(&stamp), 1),
     ));
     let hint = if state.pause {
         "已暂停 · 空格继续 · F / Esc 返回"
@@ -175,6 +241,38 @@ pub fn draw_full_lyrics(
         Hit::LyricsFullBack,
         Rect::new(hint_x, height.saturating_sub(2), hint_width, 1),
     ));
+}
+
+/// 频谱条：每列取一个频段，底部对齐，顶端用八分块补齐。
+fn draw_cava(canvas: &mut Canvas, app: &App, x: usize, y: usize, width: usize, height: usize) {
+    const BLOCKS: [&str; 9] = ["", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    let bars = width / 2; // 每两根柱子留一列空隙，才看得出一根根
+    for bar in 0..bars {
+        let column = bar * 2;
+        let band = bar * crate::viz::BANDS / bars.max(1);
+        let level = f64::from(app.viz[band.min(crate::viz::BANDS - 1)]);
+        let eighths = (level * (height * 8) as f64).round() as usize;
+        let full = (eighths / 8).min(height);
+        let rest = eighths % 8;
+        for row in 0..full {
+            let color = mix(mauve(), peach(), row as f64 / height as f64);
+            canvas.put(
+                x + column,
+                y + height - 1 - row,
+                "█",
+                Style::new(color, base()),
+            );
+        }
+        if rest > 0 && full < height {
+            let color = mix(mauve(), peach(), full as f64 / height as f64);
+            canvas.put(
+                x + column,
+                y + height - 1 - full,
+                BLOCKS[rest],
+                Style::new(color, base()),
+            );
+        }
+    }
 }
 
 pub fn draw_modal(
@@ -1392,4 +1490,17 @@ fn tail(text: &str, width: usize) -> String {
     }
     result.reverse();
     format!("…{}", result.into_iter().collect::<String>())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clock_rows_are_uniform_width() {
+        let rows = big_clock("13:33:17");
+        let width = text_width(&rows[0]);
+        assert_eq!(width, 47);
+        assert!(rows.iter().all(|row| text_width(row) == width));
+    }
 }

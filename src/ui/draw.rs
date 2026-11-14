@@ -259,11 +259,18 @@ fn draw_library(
         };
         canvas.fill(x, y, width, 1, Style::new(txt(), background));
         hits.push((Hit::Row(index), Rect::new(x, y, width, 1)));
+        // 透明模式没有行底色，悬停改用左侧标记和加粗标题提示
         canvas.put(
             x,
             y,
-            if selected { "▌" } else { " " },
-            Style::new(pink(), background),
+            if selected {
+                "▌"
+            } else if hovered {
+                "▏"
+            } else {
+                " "
+            },
+            Style::new(if selected { pink() } else { mauve() }, background),
         );
         canvas.put(
             x + 1,
@@ -291,7 +298,7 @@ fn draw_library(
         }
         let title_style = if playing {
             Style::new(pink(), background).bold()
-        } else if selected {
+        } else if selected || hovered {
             Style::new(selected_fg(), background).bold()
         } else {
             Style::new(txt(), background)
