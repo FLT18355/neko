@@ -12,6 +12,8 @@ use crossterm::style::{
 use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size};
 use crossterm::{execute, queue};
 use serde_json::json;
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -51,7 +53,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         raw.push(arg.clone());
     }
     let targets = config::resolve_dirs(&raw, &cfg);
-    let mut files = collect(&targets)?;
+    let mut files = collect(&targets, &cfg)?;
     if files.is_empty() {
         return Err("没有找到可播放的音频文件喵".into());
     }
@@ -70,19 +72,53 @@ pub fn run(args: &[String]) -> Result<(), String> {
     result
 }
 
-fn collect(targets: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+fn collect(targets: &[PathBuf], cfg: &Config) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
+    let mut music: Option<HashMap<OsString, PathBuf>> = None;
     for target in targets {
+        // m3u 放在运行目录，相对路径会让 mpv 按 m3u 所在目录解析，必须转绝对路径。
+        let target = target.canonicalize().unwrap_or_else(|_| target.clone());
         if target.is_dir() {
             files.extend(
-                library::scan_dirs(std::slice::from_ref(target))
+                library::scan_dirs(std::slice::from_ref(&target))
                     .into_iter()
                     .map(|track| track.path),
             );
-        } else if library::is_audio(target) {
-            files.push(target.clone());
         } else if target.is_file() {
-            return Err(format!("不是支持的音频格式喵：{}", target.display()));
+            if !library::is_audio(&target) {
+                return Err(format!("不是支持的音频格式喵：{}", target.display()));
+            }
+            files.push(target);
+        } else if target
+            .parent()
+            .is_none_or(|parent| parent.as_os_str().is_empty())
+        {
+            // 只给文件名时去配置的音乐目录里找，找不到才报错。
+            let Some(name) = target.file_name() else {
+                return Err(format!("文件或目录不存在喵：{}", target.display()));
+            };
+            let tracks = music.get_or_insert_with(|| {
+                let dirs: Vec<PathBuf> = config::resolve_dirs(&[], cfg)
+                    .iter()
+                    .map(|dir| dir.canonicalize().unwrap_or_else(|_| dir.clone()))
+                    .collect();
+                let mut map = HashMap::new();
+                for track in library::scan_dirs(&dirs) {
+                    if let Some(name) = track.path.file_name() {
+                        map.entry(name.to_os_string()).or_insert(track.path);
+                    }
+                }
+                map
+            });
+            match tracks.get(name) {
+                Some(path) => files.push(path.clone()),
+                None => {
+                    return Err(format!(
+                        "文件或目录不存在喵：{}（音乐目录里也没有）",
+                        target.display()
+                    ));
+                }
+            }
         } else {
             return Err(format!("文件或目录不存在喵：{}", target.display()));
         }
@@ -127,6 +163,7 @@ impl Mode {
     }
 }
 
+#[derive(Clone, PartialEq)]
 struct Span {
     text: String,
     color: Rgb,
@@ -167,6 +204,8 @@ fn text_line(text: impl Into<String>, color: Rgb) -> Line {
 
 struct Screen {
     rendered: usize,
+    previous: Vec<Line>,
+    previous_width: usize,
     lrc: Option<Lrc>,
     lrc_path: Option<PathBuf>,
     last_pos: Option<f64>,
@@ -444,43 +483,70 @@ fn next_track(files: &[PathBuf], position: Option<i64>, mode: Mode) -> Option<&P
     files.get(index)
 }
 
-fn emit(out: &mut impl Write, lines: &[Line], rendered: &mut usize) -> io::Result<()> {
-    if *rendered > 0 {
-        queue!(
-            out,
-            MoveToPreviousLine(*rendered as u16),
-            Clear(ClearType::FromCursorDown)
-        )?;
+fn emit(
+    out: &mut impl Write,
+    lines: &[Line],
+    width: usize,
+    rendered: &mut usize,
+    previous: &mut Vec<Line>,
+    previous_width: &mut usize,
+) -> io::Result<()> {
+    // 只重画变化的整行，避免整块清屏造成闪烁。
+    if *previous_width == width && *rendered == lines.len() && previous.as_slice() == lines {
+        return Ok(());
     }
-    for line in lines {
-        for span in line {
-            queue!(
-                out,
-                SetForegroundColor(Color::Rgb {
-                    r: span.color.0,
-                    g: span.color.1,
-                    b: span.color.2,
-                }),
-                SetBackgroundColor(match span.bg {
-                    Some(color) => Color::Rgb {
-                        r: color.0,
-                        g: color.1,
-                        b: color.2,
-                    },
-                    None => Color::Reset,
-                }),
-                SetAttribute(if span.bold {
-                    Attribute::Bold
-                } else {
-                    Attribute::NormalIntensity
-                }),
-                Print(&span.text)
-            )?;
+    let width_changed = *previous_width != 0 && *previous_width != width;
+    if *rendered > 0 {
+        queue!(out, MoveToPreviousLine(*rendered as u16))?;
+    }
+    if width_changed {
+        queue!(out, Clear(ClearType::FromCursorDown))?;
+    }
+    for (index, line) in lines.iter().enumerate() {
+        if width_changed || previous.get(index) != Some(line) {
+            let mut line = line.clone();
+            let used = line_width(&line);
+            if used < width {
+                let last = line.last().cloned();
+                let color = last.as_ref().map_or(theme::sub0(), |span| span.color);
+                let mut pad = Span::new(" ".repeat(width - used), color);
+                pad.bg = last.and_then(|span| span.bg);
+                line.push(pad);
+            }
+            for span in &line {
+                queue!(
+                    out,
+                    SetForegroundColor(Color::Rgb {
+                        r: span.color.0,
+                        g: span.color.1,
+                        b: span.color.2,
+                    }),
+                    SetBackgroundColor(match span.bg {
+                        Some(color) => Color::Rgb {
+                            r: color.0,
+                            g: color.1,
+                            b: color.2,
+                        },
+                        None => Color::Reset,
+                    }),
+                    SetAttribute(if span.bold {
+                        Attribute::Bold
+                    } else {
+                        Attribute::NormalIntensity
+                    }),
+                    Print(&span.text)
+                )?;
+            }
         }
         queue!(out, ResetColor, Print("\r\n"))?;
     }
+    if lines.len() < *rendered {
+        queue!(out, Clear(ClearType::FromCursorDown))?;
+    }
     out.flush()?;
     *rendered = lines.len();
+    *previous = lines.to_vec();
+    *previous_width = width;
     Ok(())
 }
 
@@ -589,6 +655,8 @@ fn play(cfg: &Config, list: &Path, files: &[PathBuf]) -> Result<(), String> {
 fn draw_loop(mpv: &mut Mpv, files: &[PathBuf]) -> Result<bool, String> {
     let mut screen = Screen {
         rendered: 0,
+        previous: Vec::new(),
+        previous_width: 0,
         lrc: None,
         lrc_path: None,
         last_pos: None,
@@ -627,8 +695,15 @@ fn draw_loop(mpv: &mut Mpv, files: &[PathBuf]) -> Result<bool, String> {
             .unwrap_or((80, 24));
         let width = width.max(20);
         let lines = screen.render(mpv, width, height, files, mode, show_lyrics);
-        emit(&mut out, &lines, &mut screen.rendered)
-            .map_err(|err| format!("操作终端失败喵：{err}"))?;
+        emit(
+            &mut out,
+            &lines,
+            width,
+            &mut screen.rendered,
+            &mut screen.previous,
+            &mut screen.previous_width,
+        )
+        .map_err(|err| format!("操作终端失败喵：{err}"))?;
         screen.last_pos = mpv.state.time_pos;
 
         let mut quit = false;
