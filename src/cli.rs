@@ -12,7 +12,7 @@ use crossterm::style::{
 use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size};
 use crossterm::{execute, queue};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
@@ -57,8 +57,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if files.is_empty() {
         return Err("没有找到可播放的音频文件喵".into());
     }
-    files.sort();
-    files.dedup();
+    let mut seen = HashSet::new();
+    files.retain(|path| seen.insert(path.clone()));
+    sort_files(&mut files, &cfg.sort);
 
     let list = config::runtime_dir().join(format!("neko-cli-{}.m3u", std::process::id()));
     let mut text = String::from("#EXTM3U\n");
@@ -70,6 +71,24 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let result = play(&cfg, &list, &files);
     let _ = fs::remove_file(&list);
     result
+}
+
+fn sort_files(files: &mut [PathBuf], mode: &str) {
+    match mode {
+        "path" => files.sort_by_cached_key(|path| path.to_string_lossy().to_lowercase()),
+        "modified" => files.sort_by_cached_key(|path| {
+            std::cmp::Reverse(
+                fs::metadata(path)
+                    .and_then(|meta| meta.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH),
+            )
+        }),
+        _ => files.sort_by_cached_key(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().to_lowercase())
+                .unwrap_or_default()
+        }),
+    }
 }
 
 fn collect(targets: &[PathBuf], cfg: &Config) -> Result<Vec<PathBuf>, String> {
@@ -202,6 +221,15 @@ fn text_line(text: impl Into<String>, color: Rgb) -> Line {
     vec![Span::new(text, color)]
 }
 
+impl Screen {
+    fn sync_lyrics(&mut self, path: &Option<PathBuf>) {
+        if self.lrc_path != *path {
+            self.lrc_path = path.clone();
+            self.lrc = self.lrc_path.as_deref().and_then(Lrc::load_for);
+        }
+    }
+}
+
 struct Screen {
     rendered: usize,
     previous: Vec<Line>,
@@ -223,23 +251,9 @@ impl Screen {
         show_lyrics: bool,
     ) -> Vec<Line> {
         let state = &mpv.state;
-        if self.lrc_path != state.path {
-            self.lrc_path = state.path.clone();
-            self.lrc = self.lrc_path.as_deref().and_then(Lrc::load_for);
-        }
+        self.sync_lyrics(&state.path);
 
-        let metadata = &state.metadata;
-        let title = metadata
-            .get("title")
-            .cloned()
-            .or_else(|| {
-                state
-                    .path
-                    .as_deref()
-                    .and_then(Path::file_stem)
-                    .map(|stem| stem.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "本喵在等音乐喵…".into());
+        let title = track_title(state).unwrap_or_else(|| "本喵在等音乐喵…".into());
         let info = track_info(state);
         let time = state.time_pos.unwrap_or(0.0);
         let duration = state.duration.unwrap_or(0.0);
@@ -329,6 +343,16 @@ impl Screen {
         ));
         lines
     }
+}
+
+fn track_title(state: &crate::mpv::State) -> Option<String> {
+    state.metadata.get("title").cloned().or_else(|| {
+        state
+            .path
+            .as_deref()
+            .and_then(Path::file_stem)
+            .map(|stem| stem.to_string_lossy().to_string())
+    })
 }
 
 fn header_line(width: usize, state: &crate::mpv::State) -> Line {
@@ -550,6 +574,63 @@ fn emit(
     Ok(())
 }
 
+#[derive(Default)]
+struct Plain {
+    path: Option<PathBuf>,
+    line: Option<usize>,
+    missing: bool,
+    lyrics_off: bool,
+}
+
+impl Plain {
+    fn update(
+        &mut self,
+        out: &mut impl Write,
+        screen: &mut Screen,
+        mpv: &Mpv,
+        show_lyrics: bool,
+    ) -> io::Result<()> {
+        let state = &mpv.state;
+        screen.sync_lyrics(&state.path);
+        let Some(path) = &state.path else {
+            return Ok(());
+        };
+        if self.path.as_ref() != Some(path) {
+            self.path = Some(path.clone());
+            self.line = None;
+            self.missing = false;
+            self.lyrics_off = false;
+            let title = track_title(state).unwrap_or_else(|| path.display().to_string());
+            writeln!(out, "\n♪ {title}")?;
+        }
+        if !show_lyrics {
+            if !self.lyrics_off {
+                writeln!(out, "· 歌词关掉啦喵")?;
+                self.lyrics_off = true;
+            }
+            return out.flush();
+        }
+        self.lyrics_off = false;
+        match &screen.lrc {
+            Some(lrc) => {
+                if let Some(index) = state.time_pos.and_then(|position| lrc.index_at(position))
+                    && self.line != Some(index)
+                {
+                    self.line = Some(index);
+                    let (time, text) = &lrc.lines[index];
+                    writeln!(out, "[{}] {}", library::duration_text(*time), text)?;
+                }
+            }
+            None if !self.missing => {
+                self.missing = true;
+                writeln!(out, "· 没有找到同名的 .lrc 喵")?;
+            }
+            None => {}
+        }
+        out.flush()
+    }
+}
+
 fn handle_key(
     mpv: &mut Mpv,
     key: KeyEvent,
@@ -665,6 +746,8 @@ fn draw_loop(mpv: &mut Mpv, files: &[PathBuf]) -> Result<bool, String> {
     let mut show_lyrics = true;
     let mut out = io::stdout();
     let interactive = io::stdin().is_terminal();
+    let fancy = io::stdout().is_terminal();
+    let mut plain = Plain::default();
     let mut started = false;
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -672,17 +755,15 @@ fn draw_loop(mpv: &mut Mpv, files: &[PathBuf]) -> Result<bool, String> {
         if !mpv.alive() {
             return Err("mpv 意外退出喵".into());
         }
+        let mut reset = false;
         if started {
             if mpv.state.idle {
                 return Ok(true);
             }
-            // 播完后 mpv 会先把 time-pos 归零、下一拍才置 idle，别把这帧画出来。
-            let reset = screen.lrc_path == mpv.state.path
+            // 循环回绕或拖回开头时 time-pos 会归零，只跳过这一帧，不能当成播放结束。
+            reset = screen.lrc_path == mpv.state.path
                 && screen.last_pos.is_some_and(|pos| pos > 1.0)
                 && mpv.state.time_pos.is_some_and(|pos| pos < 0.5);
-            if reset {
-                return Ok(true);
-            }
         } else if Instant::now() > deadline {
             return Err("mpv 没有开始播放喵".into());
         }
@@ -690,20 +771,28 @@ fn draw_loop(mpv: &mut Mpv, files: &[PathBuf]) -> Result<bool, String> {
             started = true;
         }
 
-        let (width, height) = size()
-            .map(|(width, height)| (width as usize, height as usize))
-            .unwrap_or((80, 24));
-        let width = width.max(20);
-        let lines = screen.render(mpv, width, height, files, mode, show_lyrics);
-        emit(
-            &mut out,
-            &lines,
-            width,
-            &mut screen.rendered,
-            &mut screen.previous,
-            &mut screen.previous_width,
-        )
-        .map_err(|err| format!("操作终端失败喵：{err}"))?;
+        if !reset {
+            if fancy {
+                let (width, height) = size()
+                    .map(|(width, height)| (width as usize, height as usize))
+                    .unwrap_or((80, 24));
+                let width = width.max(20);
+                let lines = screen.render(mpv, width, height, files, mode, show_lyrics);
+                emit(
+                    &mut out,
+                    &lines,
+                    width,
+                    &mut screen.rendered,
+                    &mut screen.previous,
+                    &mut screen.previous_width,
+                )
+                .map_err(|err| format!("操作终端失败喵：{err}"))?;
+            } else {
+                plain
+                    .update(&mut out, &mut screen, mpv, show_lyrics)
+                    .map_err(|err| format!("输出歌词失败喵：{err}"))?;
+            }
+        }
         screen.last_pos = mpv.state.time_pos;
 
         let mut quit = false;
