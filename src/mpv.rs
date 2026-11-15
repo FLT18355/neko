@@ -432,6 +432,10 @@ impl Mpv {
         self.send(vec![json!("stop")]).map(|_| ())
     }
 
+    pub fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
     pub fn quit(&mut self) {
         let _ = self.writer.write_all(b"{\"command\":[\"quit\"]}\n");
         for _ in 0..20 {

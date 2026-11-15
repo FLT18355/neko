@@ -1,5 +1,6 @@
 mod app;
 mod cache;
+mod cli;
 mod clock;
 mod config;
 mod keymap;
@@ -25,6 +26,7 @@ fn usage() {
     println!();
     println!("用法：");
     println!("  neko [--transparent] [音乐目录 ...]");
+    println!("  neko cli [音乐文件或目录 ...]");
     println!("  neko --help");
     println!("  neko --version");
     println!();
@@ -37,6 +39,13 @@ fn usage() {
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("cli") {
+        if let Err(err) = cli::run(&args[1..]) {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         usage();
         return;
@@ -62,16 +71,7 @@ fn main() {
     if transparent {
         cfg.transparent = true;
     }
-    let mut dirs: Vec<PathBuf> = if !dir_args.is_empty() {
-        dir_args.iter().map(|arg| config::expand_path(arg)).collect()
-    } else if !cfg.music_dirs.is_empty() {
-        cfg.music_dirs
-            .iter()
-            .map(|dir| config::expand_path(dir))
-            .collect()
-    } else {
-        vec![config::default_music_dir()]
-    };
+    let mut dirs = config::resolve_dirs(&dir_args, &cfg);
     for dir in &dirs {
         if !dir.is_dir() {
             eprintln!("音乐目录不存在：{}", dir.display());

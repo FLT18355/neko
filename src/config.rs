@@ -104,6 +104,16 @@ pub fn expand_path(raw: &str) -> PathBuf {
     PathBuf::from(raw)
 }
 
+pub fn resolve_dirs(args: &[String], cfg: &Config) -> Vec<PathBuf> {
+    if !args.is_empty() {
+        args.iter().map(|arg| expand_path(arg)).collect()
+    } else if !cfg.music_dirs.is_empty() {
+        cfg.music_dirs.iter().map(|dir| expand_path(dir)).collect()
+    } else {
+        vec![default_music_dir()]
+    }
+}
+
 pub fn runtime_dir() -> PathBuf {
     env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
