@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::{App, Modal};
+use crate::app::{App, Modal, SETTING_PULSE};
 use crate::keymap::ACTIONS;
 use crate::library;
 
@@ -287,6 +287,8 @@ pub fn draw_modal(
     hover: Option<Hit>,
     hits: &mut Vec<(Hit, Rect)>,
 ) {
+    // 弹窗后面压暗，让面板浮起来；透明模式跳过。
+    canvas.dim(0.34);
     match modal {
         Modal::Help => draw_help(canvas, app, hover, hits),
         Modal::Queue => draw_queue(canvas, app, hover, hits),
@@ -355,7 +357,9 @@ fn frame(
     let width = width.min(screen_width.saturating_sub(6)).max(10);
     let height = height.min(screen_height.saturating_sub(8)).max(5);
     let x = (screen_width - width) / 2;
-    let y = (screen_height - height) / 2;
+    // 打开时从下方滑入，关闭时滑回去。
+    let lift = ((1.0 - ease_out(canvas.anim())) * 6.0).round() as usize;
+    let y = ((screen_height - height) / 2 + lift).min(screen_height - height);
     canvas.fill(x + 2, y + 1, width, height, Style::new(txt(), crust()));
     canvas.fill(x, y, width, height, Style::new(txt(), mantle()));
     canvas.border(x, y, width, height, title, Style::new(surface1(), mantle()));
@@ -367,6 +371,11 @@ fn frame(
     );
     hits.push((Hit::ModalPanel, Rect::new(x, y, width, height)));
     (x, y, width, height)
+}
+
+fn ease_out(progress: f32) -> f32 {
+    let progress = progress.clamp(0.0, 1.0);
+    1.0 - (1.0 - progress).powi(3)
 }
 
 fn modal_button(
@@ -1401,14 +1410,23 @@ fn draw_settings(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut 
         let row_y = y + 2 + (index - offset);
         let selected = app.setting_selected == index;
         let row_hover = hover == Some(Hit::SettingRow(index));
+        let pulse = app
+            .setting_pulse
+            .filter(|(pulse_index, _)| *pulse_index == index)
+            .map(|(_, at)| {
+                1.0 - (at.elapsed().as_secs_f32() / SETTING_PULSE.as_secs_f32()).min(1.0)
+            })
+            .unwrap_or(0.0);
         let background = if selected {
-            surface1()
+            mix(surface1(), accent(index), pulse as f64 * 0.35)
         } else if row_hover {
             surface0()
+        } else if pulse > 0.0 {
+            mix(mantle(), surface0(), pulse as f64)
         } else {
             mantle()
         };
-        if selected || row_hover {
+        if selected || row_hover || pulse > 0.0 {
             canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), background));
         }
         hits.push((

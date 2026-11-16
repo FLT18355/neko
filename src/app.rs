@@ -10,9 +10,13 @@ use crate::theme;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub(crate) const MODES: [&str; 4] = ["order", "loop", "single", "shuffle"];
+/// 设置项调整后的高亮脉冲时长。
+pub(crate) const SETTING_PULSE: Duration = Duration::from_millis(360);
+/// 底部提示淡入时长。
+pub(crate) const TOAST_FADE: Duration = Duration::from_millis(280);
 pub(crate) const EQ_BANDS: [f64; 10] = [
     31.0, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
 ];
@@ -75,6 +79,13 @@ pub struct App {
     pub(crate) selected: usize,
     pub(crate) toast: Option<(String, Instant)>,
     pub(crate) modal: Option<Modal>,
+    /// 正在滑出的弹窗，动画结束后清掉。
+    pub(crate) modal_closing: Option<Modal>,
+    /// 弹窗进度 0..1，打开时增长、关闭时回落。
+    pub(crate) modal_anim: f32,
+    modal_anim_from: f32,
+    modal_anim_at: Instant,
+    pub(crate) setting_pulse: Option<(usize, Instant)>,
     pub(crate) input: String,
     pub(crate) modal_scroll: usize,
     pub(crate) setting_selected: usize,
@@ -248,6 +259,11 @@ impl App {
             selected: 0,
             toast: None,
             modal: None,
+            modal_closing: None,
+            modal_anim: 1.0,
+            modal_anim_from: 1.0,
+            modal_anim_at: Instant::now(),
+            setting_pulse: None,
             input: String::new(),
             modal_scroll: 0,
             setting_selected: 0,
@@ -363,6 +379,26 @@ impl App {
         let now = Instant::now();
         let delta = now.duration_since(self.stat_at).as_secs_f64().min(1.0);
         self.stat_at = now;
+        // 弹窗滑入/滑出约 160ms；按起始时间算进度，避免空闲后的第一次 tick 跳帧。
+        let progress = (self.modal_anim_at.elapsed().as_secs_f32() / 0.16).min(1.0);
+        if self.modal.is_some() {
+            if self.modal_anim < 1.0 {
+                self.modal_anim =
+                    self.modal_anim_from + (1.0 - self.modal_anim_from) * progress;
+            }
+        } else if self.modal_closing.is_some() {
+            self.modal_anim = self.modal_anim_from * (1.0 - progress);
+            if progress >= 1.0 {
+                self.modal_anim = 0.0;
+                self.modal_closing = None;
+            }
+        }
+        if self
+            .setting_pulse
+            .is_some_and(|(_, at)| at.elapsed() >= SETTING_PULSE)
+        {
+            self.setting_pulse = None;
+        }
         // 界面按帧刷新，mpv 属性读取仍限在 ~8 次/秒，避免 IPC 拖慢动画
         if now.duration_since(self.refreshed_at).as_millis() >= 120 {
             self.refreshed_at = now;
@@ -485,6 +521,22 @@ impl App {
 
     pub fn notify(&mut self, message: impl Into<String>) {
         self.toast = Some((message.into(), Instant::now()));
+    }
+
+    /// 需要高频重绘的状态：弹窗动画、设置项脉冲、吐司淡入。
+    pub fn animating(&self) -> bool {
+        (self.modal.is_some() && self.modal_anim < 1.0)
+            || self.modal_closing.is_some()
+            || self.setting_pulse.is_some()
+            || self
+                .toast
+                .as_ref()
+                .is_some_and(|(_, at)| at.elapsed() < TOAST_FADE)
+    }
+
+    /// 打开中的弹窗优先，关闭动画期间继续画即将消失的那个。
+    pub fn drawn_modal(&self) -> Option<Modal> {
+        self.modal.or(self.modal_closing)
     }
 
     pub fn save(&mut self) {

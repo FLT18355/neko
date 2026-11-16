@@ -201,6 +201,16 @@ pub fn selected_fg() -> Rgb {
     }
 }
 
+/// 在两色之间插值，ratio 0 → from，1 → to。
+pub fn mix(from: Rgb, to: Rgb, ratio: f64) -> Rgb {
+    let ratio = ratio.clamp(0.0, 1.0);
+    (
+        (from.0 as f64 + (to.0 as f64 - from.0 as f64) * ratio) as u8,
+        (from.1 as f64 + (to.1 as f64 - from.1 as f64) * ratio) as u8,
+        (from.2 as f64 + (to.2 as f64 - from.2 as f64) * ratio) as u8,
+    )
+}
+
 pub fn shade(color: Rgb) -> Rgb {
     if !is_light() {
         return color;

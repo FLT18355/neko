@@ -20,7 +20,7 @@ pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
 
     if app.lyrics_full {
         views::draw_full_lyrics(canvas, app, hover, hits);
-        if let Some(modal) = app.modal {
+        if let Some(modal) = app.drawn_modal() {
             views::draw_modal(canvas, app, modal, hover, hits);
         }
         return;
@@ -120,7 +120,7 @@ pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
     draw_rainbow_line(canvas, separator_y);
     draw_footer(canvas, app, footer_y, width, height, hover, hits);
 
-    if let Some(modal) = app.modal {
+    if let Some(modal) = app.drawn_modal() {
         views::draw_modal(canvas, app, modal, hover, hits);
     }
 }
@@ -993,15 +993,6 @@ fn draw_now_playing(
     }
 }
 
-fn mix(from: Rgb, to: Rgb, ratio: f64) -> Rgb {
-    let ratio = ratio.clamp(0.0, 1.0);
-    (
-        (from.0 as f64 + (to.0 as f64 - from.0 as f64) * ratio) as u8,
-        (from.1 as f64 + (to.1 as f64 - from.1 as f64) * ratio) as u8,
-        (from.2 as f64 + (to.2 as f64 - from.2 as f64) * ratio) as u8,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn draw_chip(
     canvas: &mut Canvas,
@@ -1056,28 +1047,37 @@ fn draw_footer(
     hits: &mut Vec<(Hit, Rect)>,
 ) {
     canvas.fill(0, y, width, height - y, Style::new(txt(), crust()));
-    let message = hover
-        .map(|hit| hit.label().to_string())
-        .or_else(|| {
-            app.toast
-                .as_ref()
-                .filter(|(_, at)| at.elapsed().as_secs() < 4)
-                .map(|(text, _)| text.clone())
-        })
-        .unwrap_or_else(|| {
-            format!(
-                "{} {} · {} · 音量 {:.0}%",
-                if app.mpv.state.pause { PAUSE } else { PLAY },
-                app.mode_label(),
-                app.effect_label(),
-                app.mpv.state.volume
-            )
-        });
+    let toast = app
+        .toast
+        .as_ref()
+        .filter(|(_, at)| at.elapsed().as_secs() < 4)
+        .map(|(text, at)| (text.clone(), at.elapsed()));
+    let (message, fade) = match hover {
+        Some(hit) => (hit.label().to_string(), 1.0),
+        None => match toast {
+            Some((text, age)) => {
+                let fade = (age.as_secs_f32() / crate::app::TOAST_FADE.as_secs_f32()).min(1.0);
+                (text, fade)
+            }
+            None => (
+                format!(
+                    "{} {} · {} · 音量 {:.0}%",
+                    if app.mpv.state.pause { PAUSE } else { PLAY },
+                    app.mode_label(),
+                    app.effect_label(),
+                    app.mpv.state.volume
+                ),
+                1.0,
+            ),
+        },
+    };
     let style = if hover.is_some() {
         Style::new(lavender(), mantle()).bold()
     } else {
-        Style::new(pink(), mantle())
+        Style::new(mix(yellow(), pink(), fade as f64), mantle())
     };
+    // 新提示从右侧滑入并淡成粉色。
+    let slide = ((1.0 - fade) * 4.0).round() as usize;
     let line = format!("{} {message}", PAW);
     canvas.fill(
         2,
@@ -1089,7 +1089,12 @@ fn draw_footer(
             if app.transparent { mantle() } else { surface0() },
         ),
     );
-    canvas.put(3, y, &truncate(&line, width.saturating_sub(6)), style);
+    canvas.put(
+        3 + slide,
+        y,
+        &truncate(&line, width.saturating_sub(6).saturating_sub(slide)),
+        style,
+    );
     if height <= y + 1 {
         return;
     }

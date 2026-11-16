@@ -596,7 +596,17 @@ impl App {
         if modal == Modal::Search {
             self.search_original = Some(self.filter.clone());
         }
+        // 切换弹窗时从底部重新滑入；若正在关闭则从当前进度接着滑回来。
+        let from = if self.modal.is_some() {
+            0.0
+        } else {
+            self.modal_anim
+        };
         self.modal = Some(modal);
+        self.modal_closing = None;
+        self.modal_anim_from = from;
+        self.modal_anim = from;
+        self.modal_anim_at = Instant::now();
         self.modal_scroll = 0;
         self.capture_key = false;
         match modal {
@@ -665,7 +675,12 @@ impl App {
     }
 
     pub(crate) fn close_modal(&mut self) {
-        self.modal = None;
+        // 保留刚关掉的弹窗一帧帧滑出，tick 里回落动画进度后丢弃。
+        if let Some(modal) = self.modal.take() {
+            self.modal_closing = Some(modal);
+            self.modal_anim_from = self.modal_anim;
+            self.modal_anim_at = Instant::now();
+        }
         self.input.clear();
         self.modal_scroll = 0;
         self.search_original = None;
@@ -683,9 +698,7 @@ impl App {
             self.filter = self.search_original.take().unwrap_or_default();
             self.selected = 0;
             self.rebuild_visible();
-            self.modal = None;
-            self.input.clear();
-            self.modal_scroll = 0;
+            self.close_modal();
         } else if self.modal == Some(Modal::DirAdd) {
             self.open_modal(Modal::Directory);
         } else {
@@ -1271,11 +1284,18 @@ impl App {
 
     pub(crate) fn move_setting(&mut self, delta: isize) {
         let count = self.settings_rows().len();
+        let previous = self.setting_selected;
         self.setting_selected = (self.setting_selected as isize + delta)
             .clamp(0, count.saturating_sub(1) as isize) as usize;
+        if self.setting_selected != previous {
+            self.setting_pulse = Some((self.setting_selected, Instant::now()));
+        }
     }
 
     pub(crate) fn adjust_setting(&mut self, index: usize, delta: isize) {
+        if delta != 0 {
+            self.setting_pulse = Some((index, Instant::now()));
+        }
         match index {
             0 => {
                 if delta != 0 {

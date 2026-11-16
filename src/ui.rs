@@ -59,7 +59,7 @@ impl Style {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Cell {
     ch: char,
     style: Style,
@@ -71,6 +71,8 @@ pub struct Canvas {
     height: usize,
     cells: Vec<Cell>,
     transparent: bool,
+    /// 弹窗打开进度 0..1，绘制时用来做滑入/滑出。
+    anim: f32,
 }
 
 impl Canvas {
@@ -87,6 +89,7 @@ impl Canvas {
                 width * height
             ],
             transparent,
+            anim: 1.0,
         }
     }
 
@@ -96,6 +99,27 @@ impl Canvas {
 
     pub fn height(&self) -> usize {
         self.height
+    }
+
+    pub fn set_anim(&mut self, anim: f32) {
+        self.anim = anim.clamp(0.0, 1.0);
+    }
+
+    pub fn anim(&self) -> f32 {
+        self.anim
+    }
+
+    /// 给整屏压一层底色，让弹窗浮起来。透明模式下不压，否则会画出实底。
+    pub fn dim(&mut self, amount: f32) {
+        if self.transparent {
+            return;
+        }
+        let base = base();
+        let amount = f64::from(amount);
+        for cell in &mut self.cells {
+            cell.style.fg = mix(cell.style.fg, base, amount);
+            cell.style.bg = mix(cell.style.bg, base, amount);
+        }
     }
 
     fn set(&mut self, x: usize, y: usize, ch: char, style: Style) {
@@ -187,7 +211,8 @@ impl Canvas {
         self.put(x, row, text, style);
     }
 
-    fn render(&self) -> String {
+    /// 只重写变化的行：设置页这类静态弹窗不再每帧整屏重画，闪屏随之消失。
+    fn render(&self, previous: &[Cell], previous_width: usize, force: bool) -> String {
         let emit_style = |output: &mut String, style: Style| {
             output.push_str(&format!(
                 "\x1b[38;2;{};{};{}m",
@@ -204,8 +229,17 @@ impl Canvas {
                 ));
             }
         };
+        // 终端尺寸变化或强制整帧时不能只比差异，否则终端自己重排后会留下空洞。
+        let redraw = force || previous.len() != self.cells.len() || previous_width != self.width;
         let mut output = String::with_capacity(self.width * self.height * 2);
+        // 同步更新（DECSET 2026）：支持它的终端整帧原子提交，不再撕裂。
+        output.push_str("\x1b[?2026h");
         for row in 0..self.height {
+            let start = row * self.width;
+            let end = start + self.width;
+            if !redraw && previous[start..end] == self.cells[start..end] {
+                continue;
+            }
             output.push_str(&format!("\x1b[{};1H\x1b[0m", row + 1));
             let mut style = Style::new(txt(), base());
             let mut active = false;
@@ -231,6 +265,7 @@ impl Canvas {
             }
             output.push_str("\x1b[0m\x1b[K");
         }
+        output.push_str("\x1b[?2026l");
         output
     }
 }
@@ -427,6 +462,10 @@ pub struct UiState {
     pub last_click: Option<(std::time::Instant, Hit)>,
     pub dragging_volume: bool,
     pub dragging_scrollbar: bool,
+    /// 下一次绘制整帧重发，用于动画结束或交互后修复终端自己重排造成的空洞。
+    pub force_full: bool,
+    settle_frames: u8,
+    was_animating: bool,
 }
 
 impl UiState {
@@ -452,6 +491,8 @@ impl UiState {
 pub struct Terminal {
     stdout: Stdout,
     title: String,
+    previous: Vec<Cell>,
+    previous_width: usize,
 }
 
 impl Terminal {
@@ -482,6 +523,8 @@ impl Terminal {
         Ok(Self {
             stdout,
             title: String::new(),
+            previous: Vec::new(),
+            previous_width: 0,
         })
     }
 
@@ -506,11 +549,24 @@ impl Terminal {
             Style::new(txt(), base()),
             app.transparent,
         );
+        canvas.set_anim(app.modal_anim);
+        // 动画结束后的两帧整帧重发，修复动画中途被终端丢掉的行。
+        let animating = app.animating();
+        if ui.was_animating && !animating {
+            ui.settle_frames = 2;
+        }
+        ui.was_animating = animating;
+        let force = ui.force_full || ui.settle_frames > 0;
+        ui.force_full = false;
+        ui.settle_frames = ui.settle_frames.saturating_sub(1);
         let hover = ui.hover;
         let mut hits = Vec::new();
         draw::render(&mut canvas, app, hover, &mut hits);
         ui.hits = hits;
-        self.stdout.write_all(canvas.render().as_bytes())?;
+        let output = canvas.render(&self.previous, self.previous_width, force);
+        self.previous = std::mem::take(&mut canvas.cells);
+        self.previous_width = canvas.width();
+        self.stdout.write_all(output.as_bytes())?;
         self.stdout.flush()
     }
 
@@ -536,6 +592,7 @@ pub fn handle_key(app: &mut crate::app::App, ui: &mut UiState, key: crossterm::e
     let modal = app.modal;
     let lyrics_full = app.lyrics_full;
     ui.last_click = None;
+    ui.force_full = true;
     input::handle_key(app, key);
     if app.modal != modal || app.lyrics_full != lyrics_full {
         ui.hover = None;
@@ -544,9 +601,14 @@ pub fn handle_key(app: &mut crate::app::App, ui: &mut UiState, key: crossterm::e
 pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEvent) {
     match mouse.kind {
         MouseEventKind::Moved => {
-            ui.hover = ui.hit_at(mouse.column, mouse.row);
+            let hit = ui.hit_at(mouse.column, mouse.row);
+            if hit != ui.hover {
+                ui.force_full = true;
+            }
+            ui.hover = hit;
         }
         MouseEventKind::Down(MouseButton::Left) => {
+            ui.force_full = true;
             let hit = ui.hit_at(mouse.column, mouse.row);
             let modal = app.modal;
             let lyrics_full = app.lyrics_full;
@@ -664,11 +726,13 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
+            ui.force_full = true;
             ui.dragging_volume = false;
             ui.dragging_scrollbar = false;
         }
         MouseEventKind::ScrollDown => {
             ui.last_click = None;
+            ui.force_full = true;
             if app.lyrics_full {
                 return;
             }
@@ -678,10 +742,7 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
             }
             if let Some(modal) = app.modal {
                 match modal {
-                    crate::app::Modal::Settings => {
-                        app.setting_selected =
-                            (app.setting_selected + 1).min(app.settings_rows().len() - 1);
-                    }
+                    crate::app::Modal::Settings => app.move_setting(1),
                     crate::app::Modal::Queue => {
                         app.queue_selected =
                             (app.queue_selected + 1).min(app.session.len().saturating_sub(1));
@@ -716,6 +777,7 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
         }
         MouseEventKind::ScrollUp => {
             ui.last_click = None;
+            ui.force_full = true;
             if app.lyrics_full {
                 return;
             }
@@ -725,9 +787,7 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
             }
             if let Some(modal) = app.modal {
                 match modal {
-                    crate::app::Modal::Settings => {
-                        app.setting_selected = app.setting_selected.saturating_sub(1);
-                    }
+                    crate::app::Modal::Settings => app.move_setting(-1),
                     crate::app::Modal::Queue => {
                         app.queue_selected = app.queue_selected.saturating_sub(1);
                     }
@@ -936,5 +996,49 @@ fn set_volume_from_mouse(app: &mut crate::app::App, ui: &UiState, column: u16) {
             ((column as usize).saturating_sub(rect.x) as f64) / rect.width as f64
         };
         app.set_volume(fraction.clamp(0.0, 1.0) * 100.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn canvas(width: usize, height: usize) -> Canvas {
+        Canvas::new(width, height, Style::new(txt(), base()), false)
+    }
+
+    #[test]
+    fn render_skips_unchanged_rows() {
+        let mut canvas = canvas(4, 3);
+        let first = canvas.render(&[], 0, false);
+        assert!(!first.contains("\x1b[2J"), "frame must not hard-clear");
+        assert!(
+            first.contains("\x1b[3;1H"),
+            "first frame must draw all rows"
+        );
+
+        let same = canvas.render(&canvas.cells.clone(), 4, false);
+        assert_eq!(same, "\x1b[?2026h\x1b[?2026l", "idle frame writes nothing");
+
+        let full = canvas.render(&canvas.cells.clone(), 4, true);
+        assert!(full.contains("\x1b[1;1H"), "forced frame redraws row 1");
+        assert!(full.contains("\x1b[3;1H"), "forced frame redraws row 3");
+
+        let previous = canvas.cells.clone();
+        canvas.put(0, 1, "x", Style::new(txt(), base()));
+        let changed = canvas.render(&previous, 4, false);
+        assert!(changed.contains("\x1b[2;1H"), "changed row is redrawn");
+        assert!(!changed.contains("\x1b[1;1H"), "unaffected row stays");
+    }
+
+    #[test]
+    fn dim_skips_transparent_canvas() {
+        let mut solid = canvas(1, 1);
+        let mut clear = Canvas::new(1, 1, Style::new(txt(), base()), true);
+        let before = clear.cells[0].style;
+        solid.dim(0.5);
+        clear.dim(0.5);
+        assert!(solid.cells[0].style != before);
+        assert!(clear.cells[0].style == before);
     }
 }
