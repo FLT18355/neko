@@ -19,7 +19,7 @@ use mpv::Mpv;
 use std::env;
 use std::io;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn usage() {
     println!("neko {} · 终端本地音乐播放器", env!("CARGO_PKG_VERSION"));
@@ -27,11 +27,13 @@ fn usage() {
     println!("用法：");
     println!("  neko [--transparent] [音乐目录 ...]");
     println!("  neko cli [音乐文件或目录 ...]");
+    println!("  neko server stop");
     println!("  neko --help");
     println!("  neko --version");
     println!();
     println!("可以给多个音乐目录，会合并成一个曲库。");
     println!("启动后按 ? 看快捷键，q 退出。");
+    println!("播放中退出会把音乐留在后台，用 neko server stop 停止。");
     println!("依赖 mpv；界面图标需要 Nerd Font 字体。");
     println!("配置文件：{}", config::config_path().display());
     println!("缓存文件：{}", cache::cache_path().display());
@@ -39,6 +41,20 @@ fn usage() {
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("server") {
+        match args.get(1).map(String::as_str) {
+            Some("stop") => match mpv::stop_server() {
+                Ok(true) => println!("已停止后台播放喵"),
+                Ok(false) => println!("没有正在后台播放的音乐喵"),
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(1);
+                }
+            },
+            _ => println!("用法：neko server stop"),
+        }
+        return;
+    }
     if args.first().map(String::as_str) == Some("cli") {
         if let Err(err) = cli::run(&args[1..]) {
             eprintln!("{err}");
@@ -106,6 +122,7 @@ fn main() {
         }
     };
 
+    let mut last_alive = Instant::now();
     loop {
         app.tick();
         if let Err(err) = terminal.draw(&app, &mut ui_state) {
@@ -143,10 +160,19 @@ fn main() {
         if app.quit {
             break;
         }
+        // mpv 可能被 `neko server stop` 关闭；每秒确认一次，避免每帧新建 IPC 连接。
+        if last_alive.elapsed() >= Duration::from_secs(1) {
+            last_alive = Instant::now();
+            if !app.mpv.alive() {
+                break;
+            }
+        }
     }
 
     terminal.leave();
     app.save();
-    app.shutdown();
+    if app.shutdown() {
+        println!("♪ 音乐在后台继续播放 · 停止：neko server stop");
+    }
     let _ = io::Write::flush(&mut io::stdout());
 }

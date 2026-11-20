@@ -33,7 +33,7 @@ pub fn usage() {
     println!("  ←/→ 快退/快进 5 秒    Ctrl+←/→ 30 秒");
     println!("  -/= 音量    m 静音    l 歌词    r 播放模式    q 退出");
     println!();
-    println!("列表播完自动退出。");
+    println!("列表播完自动退出；播放中退出会留在后台，用 neko server stop 停止。");
 }
 
 pub fn run(args: &[String]) -> Result<(), String> {
@@ -722,14 +722,19 @@ fn play(cfg: &Config, list: &Path, files: &[PathBuf]) -> Result<(), String> {
     drop(guard);
 
     let ended = result?;
-    println!(
-        " {PAW} {}",
-        if ended {
-            "播完啦喵~"
-        } else {
-            "本喵收工喵~"
-        }
-    );
+    if ended || !mpv.state.playing() {
+        println!(
+            " {PAW} {}",
+            if ended {
+                "播完啦喵~"
+            } else {
+                "本喵收工喵~"
+            }
+        );
+    } else {
+        mpv.detach();
+        println!(" {PAW} 音乐在后台继续播放喵 · 停止：neko server stop");
+    }
     Ok(())
 }
 

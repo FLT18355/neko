@@ -31,6 +31,41 @@ fn connect_ipc(path: &Path) -> io::Result<IpcStream> {
     }
 }
 
+/// 跨进程固定的 mpv IPC 地址，退出后仍可由 `neko server stop` 连接。
+pub fn socket_path() -> PathBuf {
+    #[cfg(unix)]
+    {
+        let uid = unsafe { libc::getuid() };
+        crate::config::runtime_dir().join(format!("neko-mpv-{uid}.sock"))
+    }
+    #[cfg(windows)]
+    {
+        let user = std::env::var("USERNAME").unwrap_or_default();
+        PathBuf::from(format!(r"\\.\pipe\neko-mpv-{user}"))
+    }
+}
+
+/// 停止残留的后台 mpv；返回是否真的停止了一个实例。
+pub fn stop_server() -> Result<bool, String> {
+    let socket = socket_path();
+    let Ok(mut stream) = connect_ipc(&socket) else {
+        let _ = fs::remove_file(&socket);
+        return Ok(false);
+    };
+    stream
+        .write_all(b"{\"command\":[\"quit\"]}\n")
+        .map_err(|err| format!("停止后台播放失败喵：{err}"))?;
+    let _ = stream.flush();
+    for _ in 0..50 {
+        if connect_ipc(&socket).is_err() {
+            let _ = fs::remove_file(&socket);
+            return Ok(true);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Err("后台 mpv 没有退出喵".into())
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct AudioInfo {
     pub samplerate: u64,
@@ -77,12 +112,22 @@ impl Default for State {
     }
 }
 
+impl State {
+    pub fn playing(&self) -> bool {
+        !self.idle && !self.pause && self.path.is_some()
+    }
+}
+
 pub struct Mpv {
-    child: Child,
+    child: Option<Child>,
     writer: IpcStream,
     reader: BufReader<IpcStream>,
     socket: PathBuf,
     next_id: i64,
+    /// 连接的是上次退出后留在后台的 mpv，而不是本次启动的进程。
+    pub attached: bool,
+    /// 退出时保留 mpv 继续播放。
+    detached: bool,
     pub state: State,
 }
 
@@ -112,14 +157,33 @@ fn parse_audio_devices(value: &Value) -> Vec<(String, String)> {
 
 impl Mpv {
     pub fn spawn(volume: f64) -> io::Result<Self> {
-        #[cfg(unix)]
-        let socket =
-            crate::config::runtime_dir().join(format!("neko-mpv-{}.sock", std::process::id()));
-        #[cfg(windows)]
-        let socket = PathBuf::from(format!(r"\\.\pipe\neko-mpv-{}", std::process::id()));
+        let socket = socket_path();
+        // 上次退出时留下的后台 mpv 直接接管，避免两个进程同时出声。
+        if let Ok(stream) = connect_ipc(&socket) {
+            #[cfg(unix)]
+            {
+                stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+                stream.set_write_timeout(Some(Duration::from_millis(500)))?;
+            }
+            let writer = stream.try_clone()?;
+            let reader = BufReader::new(stream);
+            let mut mpv = Self {
+                child: None,
+                writer,
+                reader,
+                socket,
+                next_id: 0,
+                attached: true,
+                detached: false,
+                state: State::default(),
+            };
+            mpv.refresh();
+            return Ok(mpv);
+        }
         let _ = fs::remove_file(&socket);
 
-        let mut child = Command::new("mpv")
+        let mut command = Command::new("mpv");
+        command
             .arg("--no-config")
             .arg("--idle=yes")
             .arg("--no-video")
@@ -132,8 +196,14 @@ impl Mpv {
             .arg(format!("--input-ipc-server={}", socket.display()))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        {
+            // 独立进程组：终端关闭或 Ctrl+C 不会带走后台播放。
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let mut child = command.spawn()?;
 
         let mut stream = None;
         for _ in 0..100 {
@@ -161,16 +231,23 @@ impl Mpv {
         let reader = BufReader::new(stream);
 
         Ok(Self {
-            child,
+            child: Some(child),
             writer,
             reader,
             socket,
             next_id: 0,
+            attached: false,
+            detached: false,
             state: State {
                 volume,
                 ..State::default()
             },
         })
+    }
+
+    /// 退出时让 mpv 留在后台继续播放。
+    pub fn detach(&mut self) {
+        self.detached = true;
     }
 
     fn send(&mut self, command: Vec<Value>) -> Result<Option<Value>, String> {
@@ -433,32 +510,51 @@ impl Mpv {
     }
 
     pub fn alive(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        match self.child.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+            None => connect_ipc(&self.socket).is_ok(),
+        }
     }
 
     pub fn quit(&mut self) {
         let _ = self.writer.write_all(b"{\"command\":[\"quit\"]}\n");
-        for _ in 0..20 {
-            if let Ok(Some(_)) = self.child.try_wait() {
-                break;
+        if let Some(child) = self.child.as_mut() {
+            for _ in 0..20 {
+                if let Ok(Some(_)) = child.try_wait() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(25));
             }
-            std::thread::sleep(Duration::from_millis(25));
+            let _ = child.kill();
+            let _ = child.wait();
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
         let _ = fs::remove_file(&self.socket);
     }
 }
 
 impl Drop for Mpv {
     fn drop(&mut self) {
-        self.quit();
+        if !self.detached {
+            self.quit();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playing_requires_an_unpaused_track() {
+        let mut state = State::default();
+        assert!(!state.playing());
+        state.idle = false;
+        assert!(!state.playing());
+        state.path = Some(PathBuf::from("/tmp/song.flac"));
+        assert!(state.playing());
+        state.pause = true;
+        assert!(!state.playing());
+    }
 
     #[test]
     fn parses_audio_devices_and_skips_bad_entries() {

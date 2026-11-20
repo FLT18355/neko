@@ -189,6 +189,8 @@ impl App {
             cfg.sort = "name".into();
         }
         library::sort_tracks(&mut tracks, &cfg.sort);
+        // 接管后台 mpv 时不要重置速度、音效或设备，否则会打断正在播放的音乐。
+        let attached = mpv.attached && mpv.state.path.is_some();
         let mode = cfg.mode.clone();
         let sort = cfg.sort.clone();
         let remaining = cfg.time_remaining;
@@ -212,23 +214,25 @@ impl App {
         let cached_last = cache.last_path.clone();
         let bindings = build_bindings(&cfg.keys);
         let playlists = cfg.playlists.clone();
-        let _ = mpv.apply_mode(&mode);
-        // 每次启动都从 1.0x 开始，避免上次调速残留。
-        cfg.speed = 1.0;
-        let _ = mpv.set_prop("speed", json!(1.0));
-        let effect = EFFECTS
-            .iter()
-            .find(|(name, _)| *name == cfg.effect)
-            .copied()
-            .unwrap_or(EFFECTS[0]);
-        let graph = if cfg.eq_on {
-            eq_graph(&cfg.eq_gains)
-        } else {
-            effect.1.to_string()
-        };
-        let _ = mpv.set_af(&graph);
-        if !cfg.audio_device.is_empty() {
-            let _ = mpv.set_prop("audio-device", json!(cfg.audio_device));
+        if !attached {
+            let _ = mpv.apply_mode(&mode);
+            // 每次启动都从 1.0x 开始，避免上次调速残留。
+            cfg.speed = 1.0;
+            let _ = mpv.set_prop("speed", json!(1.0));
+            let effect = EFFECTS
+                .iter()
+                .find(|(name, _)| *name == cfg.effect)
+                .copied()
+                .unwrap_or(EFFECTS[0]);
+            let graph = if cfg.eq_on {
+                eq_graph(&cfg.eq_gains)
+            } else {
+                effect.1.to_string()
+            };
+            let _ = mpv.set_af(&graph);
+            if !cfg.audio_device.is_empty() {
+                let _ = mpv.set_prop("audio-device", json!(cfg.audio_device));
+            }
         }
 
         let mut app = Self {
@@ -291,33 +295,57 @@ impl App {
         };
         app.selected = 0;
         app.rebuild_visible();
-        let restored = app.restore_queue(
-            &cached_queue,
-            cached_queue_pos,
-            cached_last.as_deref(),
-            cached_position,
-        );
-        if app.tracks.is_empty() {
-            app.notify("曲库是空的，按 o 选一个音乐目录喵");
-        } else if let Some(last) = cached_selected.or(cached_last) {
-            let path = PathBuf::from(&last);
-            if let Some(position) = app
-                .visible
-                .iter()
-                .position(|&index| app.tracks[index].path == path)
-            {
-                app.selected = position;
-                if !restored {
-                    app.notify(format!(
-                        "上次听到 · {} · Enter 继续",
-                        app.tracks[app.visible[position]].title
-                    ));
+        let mut restored = false;
+        if attached {
+            app.sync_session_from_mpv();
+            if let Some(path) = app.mpv.state.path.clone() {
+                app.last_path = Some(path.clone());
+                app.last_position = app.mpv.state.time_pos.unwrap_or(0.0);
+                app.last_duration = app.mpv.state.duration;
+                app.lrc = Lrc::load_for(&path);
+                app.lrc_path = Some(path.clone());
+                if let Some(position) = app
+                    .visible
+                    .iter()
+                    .position(|&index| app.tracks[index].path == path)
+                {
+                    app.selected = position;
+                }
+                app.notify("已连接到后台播放喵");
+                restored = true;
+            }
+        }
+        if !restored {
+            restored = app.restore_queue(
+                &cached_queue,
+                cached_queue_pos,
+                cached_last.as_deref(),
+                cached_position,
+            );
+        }
+        if !attached {
+            if app.tracks.is_empty() {
+                app.notify("曲库是空的，按 o 选一个音乐目录喵");
+            } else if let Some(last) = cached_selected.or(cached_last) {
+                let path = PathBuf::from(&last);
+                if let Some(position) = app
+                    .visible
+                    .iter()
+                    .position(|&index| app.tracks[index].path == path)
+                {
+                    app.selected = position;
+                    if !restored {
+                        app.notify(format!(
+                            "上次听到 · {} · Enter 继续",
+                            app.tracks[app.visible[position]].title
+                        ));
+                    }
+                } else if !restored {
+                    app.notify("按 ? 看快捷键；空格播放，q 退出");
                 }
             } else if !restored {
                 app.notify("按 ? 看快捷键；空格播放，q 退出");
             }
-        } else if !restored {
-            app.notify("按 ? 看快捷键；空格播放，q 退出");
         }
         app
     }
@@ -574,9 +602,16 @@ impl App {
         }
     }
 
-    pub fn shutdown(&mut self) {
+    /// 播放中退出时把 mpv 留在后台，返回是否仍在播放。
+    pub fn shutdown(&mut self) -> bool {
         let _ = std::fs::remove_file(Self::temp_m3u());
+        self.mpv.refresh();
+        if self.mpv.alive() && self.mpv.state.playing() {
+            self.mpv.detach();
+            return true;
+        }
         self.mpv.quit();
+        false
     }
 
     pub(crate) fn roots(&self) -> Vec<PathBuf> {
