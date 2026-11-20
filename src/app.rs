@@ -51,12 +51,14 @@ pub(crate) enum Modal {
     AudioDevice,
     Stats,
     Keybindings,
+    Browse,
 }
 
 pub struct App {
     pub(crate) mpv: Mpv,
     pub(crate) cfg: Config,
     pub(crate) cache: Cache,
+    pub(crate) index: library::Index,
     pub(crate) tracks: Vec<Track>,
     pub(crate) visible: Vec<usize>,
     pub(crate) view: String,
@@ -96,6 +98,12 @@ pub struct App {
     pub(crate) last_duration: Option<f64>,
     pub(crate) stat_at: Instant,
     pub(crate) folder: String,
+    pub(crate) group_filter: String,
+    pub(crate) browse: String,
+    pub(crate) browse_groups: Vec<library::Group>,
+    pub(crate) browse_selected: usize,
+    pub(crate) radio_at: Option<Instant>,
+    pub(crate) radio_seq: u64,
     pub(crate) folder_selected: usize,
     pub(crate) dir_selected: usize,
     pub(crate) playlists: Vec<crate::config::Playlist>,
@@ -177,6 +185,7 @@ impl App {
         mut mpv: Mpv,
         mut tracks: Vec<Track>,
         dirs: Vec<PathBuf>,
+        index: library::Index,
     ) -> Self {
         cfg.music_dirs = dirs
             .iter()
@@ -198,7 +207,7 @@ impl App {
         cfg.theme = theme::set(&cfg.theme).to_string();
         cfg.eq_gains.truncate(EQ_BANDS.len());
         cfg.eq_gains.resize(EQ_BANDS.len(), 0.0);
-        let cached_view = if ["all", "fav", "recent", "folder"]
+        let cached_view = if ["all", "fav", "recent", "folder", "album", "artist", "genre"]
             .contains(&cache.view.as_str())
         {
             cache.view.clone()
@@ -207,6 +216,7 @@ impl App {
         };
         let cached_filter = cache.filter.clone();
         let cached_folder = cache.folder.clone();
+        let cached_group = cache.group.clone();
         let cached_queue = cache.queue.clone();
         let cached_queue_pos = cache.queue_pos;
         let cached_position = cache.last_position;
@@ -239,6 +249,7 @@ impl App {
             mpv,
             cfg,
             cache,
+            index,
             tracks,
             visible: Vec::new(),
             view: cached_view,
@@ -278,6 +289,12 @@ impl App {
             last_duration: None,
             stat_at: Instant::now(),
             folder: cached_folder,
+            group_filter: cached_group,
+            browse: "album".into(),
+            browse_groups: Vec::new(),
+            browse_selected: 0,
+            radio_at: None,
+            radio_seq: 0,
             folder_selected: 0,
             dir_selected: 0,
             playlists,
@@ -295,6 +312,18 @@ impl App {
         };
         app.selected = 0;
         app.rebuild_visible();
+        if matches!(app.view.as_str(), "album" | "artist" | "genre") {
+            app.browse = app.view.clone();
+        }
+        app.refresh_browse_groups();
+        if matches!(app.view.as_str(), "album" | "artist" | "genre")
+            && !app
+                .browse_groups
+                .iter()
+                .any(|group| group.key == app.group_filter)
+        {
+            app.set_view("all");
+        }
         let mut restored = false;
         if attached {
             app.sync_session_from_mpv();
@@ -431,6 +460,7 @@ impl App {
         if now.duration_since(self.refreshed_at).as_millis() >= 120 {
             self.refreshed_at = now;
             self.mpv.refresh();
+            self.radio_fill();
         }
         let playing =
             !self.mpv.state.pause && !self.mpv.state.idle && self.mpv.state.path.is_some();
@@ -581,6 +611,7 @@ impl App {
         self.cache.view = self.view.clone();
         self.cache.filter = self.filter.clone();
         self.cache.folder = self.folder.clone();
+        self.cache.group = self.group_filter.clone();
         self.cache.queue = self
             .session
             .iter()
@@ -640,11 +671,17 @@ impl App {
                     .iter()
                     .any(|path| path == &track.path.to_string_lossy()),
                 "folder" => library::relative_folder(&track.path, &roots) == self.folder,
+                "album" => track.meta.album_key() == self.group_filter,
+                "artist" => track.meta.artist == self.group_filter,
+                "genre" => track.meta.genre == self.group_filter,
                 _ => true,
             };
             if in_view
                 && (needle.is_empty()
                     || track.title.to_lowercase().contains(&needle)
+                    || track.meta.artist.to_lowercase().contains(&needle)
+                    || track.meta.album.to_lowercase().contains(&needle)
+                    || track.meta.genre.to_lowercase().contains(&needle)
                     || track
                         .path
                         .to_string_lossy()
@@ -660,8 +697,47 @@ impl App {
 
     pub(crate) fn set_view(&mut self, view: &str) {
         self.view = view.into();
+        if !matches!(view, "album" | "artist" | "genre") {
+            self.group_filter.clear();
+        }
         self.selected = 0;
         self.rebuild_visible();
+    }
+
+    pub(crate) fn refresh_browse_groups(&mut self) {
+        self.browse_groups = library::groups(&self.tracks, &self.browse);
+        self.browse_selected = self
+            .browse_selected
+            .min(self.browse_groups.len().saturating_sub(1));
+    }
+
+    pub(crate) fn set_browse(&mut self, browse: &str) {
+        if !matches!(browse, "album" | "artist" | "genre") {
+            return;
+        }
+        self.browse = browse.into();
+        self.browse_selected = 0;
+        self.refresh_browse_groups();
+    }
+
+    pub(crate) fn browse_move(&mut self, delta: isize) {
+        if self.browse_groups.is_empty() {
+            self.browse_selected = 0;
+            return;
+        }
+        self.browse_selected = (self.browse_selected as isize + delta)
+            .clamp(0, self.browse_groups.len().saturating_sub(1) as isize)
+            as usize;
+    }
+
+    pub(crate) fn browse_cycle(&mut self, delta: isize) {
+        let kinds = ["album", "artist", "genre"];
+        let current = kinds
+            .iter()
+            .position(|kind| *kind == self.browse)
+            .unwrap_or(0);
+        let next = (current as isize + delta).rem_euclid(kinds.len() as isize) as usize;
+        self.set_browse(kinds[next]);
     }
 
     pub(crate) fn cycle_view(&mut self) {
@@ -734,6 +810,24 @@ impl App {
                     "文件夹 · 根目录".into()
                 } else {
                     format!("文件夹 · {}", self.folder)
+                }
+            }
+            "album" | "artist" | "genre" => {
+                let kind = match self.view.as_str() {
+                    "album" => "专辑",
+                    "artist" => "歌手",
+                    _ => "流派",
+                };
+                let label = self
+                    .browse_groups
+                    .iter()
+                    .find(|group| group.key == self.group_filter)
+                    .map(|group| group.label.clone())
+                    .unwrap_or_default();
+                if label.is_empty() {
+                    kind.into()
+                } else {
+                    format!("{kind} · {label}")
                 }
             }
             _ => "全部歌曲".into(),

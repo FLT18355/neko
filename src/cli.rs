@@ -53,7 +53,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
         raw.push(arg.clone());
     }
     let targets = config::resolve_dirs(&raw, &cfg);
-    let mut files = collect(&targets, &cfg)?;
+    let mut index = library::Index::load();
+    let mut files = collect(&targets, &cfg, &mut index)?;
+    if let Err(err) = index.save() {
+        eprintln!("保存曲库索引失败：{err}");
+    }
     if files.is_empty() {
         return Err("没有找到可播放的音频文件喵".into());
     }
@@ -91,7 +95,11 @@ fn sort_files(files: &mut [PathBuf], mode: &str) {
     }
 }
 
-fn collect(targets: &[PathBuf], cfg: &Config) -> Result<Vec<PathBuf>, String> {
+fn collect(
+    targets: &[PathBuf],
+    cfg: &Config,
+    index: &mut library::Index,
+) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     let mut music: Option<HashMap<OsString, PathBuf>> = None;
     for target in targets {
@@ -99,7 +107,7 @@ fn collect(targets: &[PathBuf], cfg: &Config) -> Result<Vec<PathBuf>, String> {
         let target = target.canonicalize().unwrap_or_else(|_| target.clone());
         if target.is_dir() {
             files.extend(
-                library::scan_dirs(std::slice::from_ref(&target))
+                library::scan_dirs(std::slice::from_ref(&target), index)
                     .into_iter()
                     .map(|track| track.path),
             );
@@ -122,7 +130,7 @@ fn collect(targets: &[PathBuf], cfg: &Config) -> Result<Vec<PathBuf>, String> {
                     .map(|dir| dir.canonicalize().unwrap_or_else(|_| dir.clone()))
                     .collect();
                 let mut map = HashMap::new();
-                for track in library::scan_dirs(&dirs) {
+                for track in library::scan_dirs(&dirs, index) {
                     if let Some(name) = track.path.file_name() {
                         map.entry(name.to_os_string()).or_insert(track.path);
                     }

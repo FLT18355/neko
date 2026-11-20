@@ -397,6 +397,7 @@ pub enum Hit {
     SettingLeft(usize),
     SettingRight(usize),
     ModalRow(usize),
+    BrowseTab(usize),
     EqualizerRow(usize),
     EqualizerLeft(usize),
     EqualizerRight(usize),
@@ -411,6 +412,7 @@ impl Hit {
             Hit::Tab(1) => "收藏 · 2",
             Hit::Tab(2) => "最近播放 · 3",
             Hit::Tab(3) => "文件夹 · 4",
+            Hit::Tab(4) => "浏览曲库 · Ctrl+A",
             Hit::Tab(_) => "视图",
             Hit::Row(_) => "单击选中 · 再点一次播放",
             Hit::PlayPause => "播放 / 暂停 · 空格",
@@ -446,6 +448,7 @@ impl Hit {
             Hit::SettingRow(_) => "单击选中 · 双击调整",
             Hit::SettingLeft(_) | Hit::SettingRight(_) => "点击调整",
             Hit::ModalRow(_) => "单击选中 · 双击确认",
+            Hit::BrowseTab(_) => "切换专辑 / 歌手 / 流派",
             Hit::EqualizerRow(_) => "单击选中 · 双击归零",
             Hit::EqualizerLeft(_) => "降低 1 dB",
             Hit::EqualizerRight(_) => "提高 1 dB",
@@ -645,6 +648,8 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                 Hit::Tab(index) => {
                     if index == 3 {
                         app.open_modal(Modal::Folders);
+                    } else if index == 4 {
+                        app.open_browse();
                     } else {
                         let view = ["all", "fav", "recent"][index.min(2)];
                         app.set_view(view);
@@ -768,6 +773,7 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                         app.keybind_selected =
                             (app.keybind_selected + 1).min(crate::keymap::ACTIONS.len() - 1);
                     }
+                    crate::app::Modal::Browse => app.browse_move(1),
                     _ => app.modal_scroll += 3,
                 }
             } else {
@@ -807,6 +813,7 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                     crate::app::Modal::Keybindings => {
                         app.keybind_selected = app.keybind_selected.saturating_sub(1);
                     }
+                    crate::app::Modal::Browse => app.browse_move(-1),
                     _ => app.modal_scroll = app.modal_scroll.saturating_sub(3),
                 }
             } else {
@@ -847,6 +854,10 @@ fn handle_modal_click(app: &mut crate::app::App, ui: &mut UiState, hit: Hit) {
             if ui.double_click(hit) {
                 activate_modal_row(app);
             }
+        }
+        Hit::BrowseTab(index) => {
+            let kind = ["album", "artist", "genre"][index.min(2)];
+            app.set_browse(kind);
         }
         Hit::EqualizerRow(index) => {
             app.eq_selected = index.min(crate::app::EQ_BANDS.len());
@@ -892,6 +903,9 @@ fn select_modal_row(app: &mut crate::app::App, index: usize) {
         Some(Modal::Keybindings) => {
             app.keybind_selected = index.min(crate::keymap::ACTIONS.len().saturating_sub(1));
         }
+        Some(Modal::Browse) => {
+            app.browse_selected = index.min(app.browse_groups.len().saturating_sub(1));
+        }
         _ => {}
     }
 }
@@ -907,6 +921,7 @@ fn activate_modal_row(app: &mut crate::app::App) {
         Some(Modal::Equalizer) => app.activate_eq_row(),
         Some(Modal::Queue) => app.play_queue_index(app.queue_selected),
         Some(Modal::Settings) => app.activate_setting(app.setting_selected),
+        Some(Modal::Browse) => app.select_browse_group(),
         _ => {}
     }
 }

@@ -28,6 +28,8 @@ pub enum Action {
     Shuffle,
     ABLoop,
     Favorite,
+    Radio,
+    Browse,
     ViewAll,
     ViewFav,
     ViewRecent,
@@ -59,7 +61,7 @@ pub enum Action {
     ClearFilter,
 }
 
-pub const ACTIONS: [Action; 55] = [
+pub const ACTIONS: [Action; 57] = [
     Action::Quit,
     Action::PlayPause,
     Action::PlaySelected,
@@ -86,6 +88,8 @@ pub const ACTIONS: [Action; 55] = [
     Action::Shuffle,
     Action::ABLoop,
     Action::Favorite,
+    Action::Radio,
+    Action::Browse,
     Action::ViewAll,
     Action::ViewFav,
     Action::ViewRecent,
@@ -149,6 +153,8 @@ pub const DEFAULT_BINDINGS: &[(Action, &str)] = &[
     (Action::Shuffle, "ctrl+s"),
     (Action::ABLoop, "a"),
     (Action::Favorite, "f"),
+    (Action::Radio, "ctrl+o"),
+    (Action::Browse, "ctrl+a"),
     (Action::ViewAll, "1"),
     (Action::ViewFav, "2"),
     (Action::ViewRecent, "3"),
@@ -209,6 +215,8 @@ impl Action {
             Action::Shuffle => "shuffle",
             Action::ABLoop => "ab_loop",
             Action::Favorite => "favorite",
+            Action::Radio => "radio",
+            Action::Browse => "browse",
             Action::ViewAll => "view_all",
             Action::ViewFav => "view_fav",
             Action::ViewRecent => "view_recent",
@@ -269,6 +277,8 @@ impl Action {
             Action::Shuffle => "打乱队列",
             Action::ABLoop => "A-B 循环",
             Action::Favorite => "收藏 / 取消收藏",
+            Action::Radio => "智能电台开关",
+            Action::Browse => "按专辑 / 歌手 / 流派浏览",
             Action::ViewAll => "全部歌曲视图",
             Action::ViewFav => "收藏视图",
             Action::ViewRecent => "最近播放视图",

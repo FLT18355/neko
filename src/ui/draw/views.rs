@@ -342,6 +342,7 @@ pub fn draw_modal(
         Modal::AudioDevice => draw_devices(canvas, app, hover, hits),
         Modal::Stats => draw_stats(canvas, app, hover, hits),
         Modal::Keybindings => draw_keybindings(canvas, app, hover, hits),
+        Modal::Browse => draw_browse(canvas, app, hover, hits),
     }
 }
 
@@ -1006,6 +1007,116 @@ fn draw_folders(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut V
             hits.push((Hit::ModalRow(index), Rect::new(x + 1, row_y, width - 2, 1)));
         }
     }
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    button_x = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Open,
+        hover,
+        hits,
+    );
+    let _ = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Close,
+        hover,
+        hits,
+    );
+}
+
+fn draw_browse(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
+    let width = 66;
+    let height = canvas.height().saturating_sub(6).clamp(10, 26);
+    let (x, y, width, height) = frame(canvas, width, height, "浏览曲库", hits);
+
+    let tabs = [("专辑", "album"), ("歌手", "artist"), ("流派", "genre")];
+    let mut tab_x = x + 2;
+    for (index, (label, kind)) in tabs.into_iter().enumerate() {
+        let active = app.browse == kind;
+        let hovered = hover == Some(Hit::BrowseTab(index));
+        let style = if active {
+            Style::new(ink_on(pink()), pink()).bold()
+        } else if hovered {
+            Style::new(selected_fg(), surface0()).bold()
+        } else {
+            Style::new(sub1(), mantle())
+        };
+        let text = format!(" {label} ");
+        canvas.put(tab_x, y + 1, &text, style);
+        hits.push((
+            Hit::BrowseTab(index),
+            Rect::new(tab_x, y + 1, text_width(&text), 1),
+        ));
+        tab_x += text_width(&text) + 1;
+    }
+    canvas.put(
+        x + width - 12,
+        y + 1,
+        &format!("{} 项", app.browse_groups.len()),
+        Style::new(overlay0(), mantle()),
+    );
+
+    let rows = height.saturating_sub(5);
+    if app.browse_groups.is_empty() {
+        canvas.put(
+            x + 2,
+            y + 3,
+            "曲库是空的喵，按 o 换个目录",
+            Style::new(overlay0(), mantle()),
+        );
+    } else {
+        let offset = app
+            .browse_selected
+            .saturating_sub(rows / 2)
+            .min(app.browse_groups.len().saturating_sub(rows));
+        for (row, group) in app.browse_groups.iter().skip(offset).take(rows).enumerate() {
+            let index = offset + row;
+            let selected = index == app.browse_selected;
+            let row_hover = hover == Some(Hit::ModalRow(index));
+            let row_y = y + 3 + row;
+            let background = if selected {
+                surface1()
+            } else if row_hover {
+                mix(mantle(), surface0(), 0.55)
+            } else {
+                mantle()
+            };
+            if selected || row_hover {
+                canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), background));
+            }
+            canvas.put(
+                x + 2,
+                row_y,
+                &format!(
+                    "{:>3}  {}",
+                    index + 1,
+                    truncate(&group.label, width.saturating_sub(22))
+                ),
+                if selected || row_hover {
+                    Style::new(pink(), background).bold()
+                } else {
+                    Style::new(txt(), background)
+                },
+            );
+            canvas.put(
+                x + width - 18,
+                row_y,
+                &format!(
+                    "{} 首 {}",
+                    group.count,
+                    library::duration_text(group.duration)
+                ),
+                Style::new(overlay0(), background),
+            );
+            hits.push((Hit::ModalRow(index), Rect::new(x + 1, row_y, width - 2, 1)));
+        }
+    }
+
     let limit = x + width - 2;
     let mut button_x = x + 2;
     button_x = modal_button(

@@ -13,6 +13,7 @@ pub struct Cache {
     pub view: String,
     pub filter: String,
     pub folder: String,
+    pub group: String,
     pub selected_path: Option<String>,
     pub queue: Vec<String>,
     pub queue_pos: usize,

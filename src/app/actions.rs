@@ -87,6 +87,8 @@ impl App {
             Action::Shuffle => self.shuffle_now(),
             Action::ABLoop => self.cycle_ab(),
             Action::Favorite => self.toggle_favorite(),
+            Action::Radio => self.toggle_radio(),
+            Action::Browse => self.open_browse(),
             Action::ViewAll => self.set_view("all"),
             Action::ViewFav => self.set_view("fav"),
             Action::ViewRecent => self.set_view("recent"),
@@ -499,8 +501,20 @@ impl App {
             return;
         }
         let current = self.current_path();
-        self.tracks = library::scan_dirs(&dirs);
+        self.tracks = library::scan_dirs(&dirs, &mut self.index);
+        if let Err(err) = self.index.save() {
+            self.notify(format!("保存曲库索引失败：{err}"));
+        }
         library::sort_tracks(&mut self.tracks, &self.sort);
+        self.refresh_browse_groups();
+        if matches!(self.view.as_str(), "album" | "artist" | "genre")
+            && !self
+                .browse_groups
+                .iter()
+                .any(|group| group.key == self.group_filter)
+        {
+            self.set_view("all");
+        }
         self.rebuild_visible();
         if let Some(path) = current
             && let Some(position) = self
@@ -931,6 +945,29 @@ impl App {
         self.close_modal();
     }
 
+    pub(crate) fn open_browse(&mut self) {
+        if matches!(self.view.as_str(), "album" | "artist" | "genre") {
+            self.browse = self.view.clone();
+        }
+        self.refresh_browse_groups();
+        self.open_modal(Modal::Browse);
+    }
+
+    pub(crate) fn select_browse_group(&mut self) {
+        let Some(group) = self.browse_groups.get(self.browse_selected).cloned() else {
+            self.notify("曲库是空的喵");
+            return;
+        };
+        let kind = self.browse.clone();
+        self.view = kind;
+        self.group_filter = group.key;
+        self.selected = 0;
+        self.rebuild_visible();
+        let count = self.visible.len();
+        self.notify(format!("{} · {count} 首", group.label));
+        self.close_modal();
+    }
+
     pub(crate) fn effect_label(&self) -> String {
         if self.cfg.eq_on {
             "自定义 EQ".into()
@@ -1126,6 +1163,111 @@ impl App {
         });
     }
 
+    pub(crate) fn toggle_radio(&mut self) {
+        self.cfg.radio = !self.cfg.radio;
+        if self.cfg.radio {
+            self.radio_at = None;
+            self.notify("智能电台 · 开启 · 队列快播完时自动续播");
+        } else {
+            self.notify("智能电台 · 关闭");
+        }
+    }
+
+    /// 队列只剩两首时按标签相似度补一首，保持智能电台不断播。
+    pub(crate) fn radio_fill(&mut self) {
+        if !self.cfg.radio || self.mpv.state.pause {
+            return;
+        }
+        let now = Instant::now();
+        if self
+            .radio_at
+            .is_some_and(|at| now.duration_since(at) < Duration::from_secs(1))
+        {
+            return;
+        }
+        let Some(position) = self.mpv.state.playlist_pos else {
+            return;
+        };
+        if position < 0 {
+            return;
+        }
+        let count = self.mpv.state.playlist_count.unwrap_or(0);
+        if count <= 0 || count - position > 2 || self.session.is_empty() {
+            return;
+        }
+        let current = self.session.get(position as usize).cloned().or_else(|| {
+            let path = self.mpv.state.path.as_ref()?;
+            self.tracks
+                .iter()
+                .find(|track| &track.path == path)
+                .cloned()
+        });
+        let Some(current) = current else {
+            return;
+        };
+        let played: std::collections::HashSet<String> = self
+            .session
+            .iter()
+            .map(|track| track.path.to_string_lossy().to_string())
+            .collect();
+        let recent: std::collections::HashSet<String> =
+            self.cache.recent.iter().take(20).cloned().collect();
+        let mut candidates: Vec<(f64, &library::Track)> = self
+            .tracks
+            .iter()
+            .filter(|track| track.path != current.path)
+            .filter(|track| {
+                let key = track.path.to_string_lossy();
+                !played.contains(key.as_ref()) && !recent.contains(key.as_ref())
+            })
+            .map(|track| (library::similarity(&current, track), track))
+            .collect();
+        if candidates.is_empty() {
+            // 曲库都被排过时，至少避开队列尾部，别把上一首立刻重复一遍。
+            let tail: std::collections::HashSet<String> = self
+                .session
+                .iter()
+                .rev()
+                .take(3)
+                .map(|track| track.path.to_string_lossy().to_string())
+                .collect();
+            candidates = self
+                .tracks
+                .iter()
+                .filter(|track| track.path != current.path)
+                .filter(|track| !tail.contains(track.path.to_string_lossy().as_ref()))
+                .map(|track| (library::similarity(&current, track), track))
+                .collect();
+        }
+        if candidates.is_empty() {
+            candidates = self
+                .tracks
+                .iter()
+                .filter(|track| track.path != current.path)
+                .map(|track| (library::similarity(&current, track), track))
+                .collect();
+        }
+        if candidates.is_empty() {
+            return;
+        }
+        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        // 只有同歌手、同专辑或同流派才算强相关；年代和时长只用于排序。
+        let strong = candidates.iter().any(|(score, _)| *score >= 3.0);
+        if strong {
+            candidates.retain(|(score, _)| *score >= 3.0);
+        }
+        let top = candidates.len().min(3);
+        self.radio_seq = self.radio_seq.wrapping_add(1);
+        let pick = (self.radio_seq as usize + count as usize) % top;
+        let track = candidates[pick].1.clone();
+        self.radio_at = Some(now);
+        if self.mpv.append_track(&track.path).is_ok() {
+            self.session.push(track);
+            self.mpv.refresh();
+            self.sync_session_from_mpv();
+        }
+    }
+
     pub(crate) fn cycle_theme(&mut self) {
         let key = theme::next();
         self.cfg.theme = key.to_string();
@@ -1254,6 +1396,10 @@ impl App {
                 "断点续播".into(),
                 if self.cfg.resume { "开启" } else { "关闭" }.into(),
             ),
+            (
+                "智能电台".into(),
+                if self.cfg.radio { "开启" } else { "关闭" }.into(),
+            ),
             ("快捷键".into(), "自定义".into()),
             (
                 "音频设备".into(),
@@ -1342,20 +1488,25 @@ impl App {
             }
             15 => {
                 if delta != 0 {
-                    self.open_modal(Modal::Keybindings);
+                    self.toggle_radio();
                 }
             }
             16 => {
                 if delta != 0 {
-                    self.open_modal(Modal::AudioDevice);
+                    self.open_modal(Modal::Keybindings);
                 }
             }
             17 => {
                 if delta != 0 {
+                    self.open_modal(Modal::AudioDevice);
+                }
+            }
+            18 => {
+                if delta != 0 {
                     self.clear_recent();
                 }
             }
-            18 | 19 => {}
+            19 | 20 => {}
             _ => {}
         }
     }

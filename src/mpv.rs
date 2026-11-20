@@ -437,6 +437,15 @@ impl Mpv {
         self.send(vec![json!("playlist-next")]).map(|_| ())
     }
 
+    pub fn append_track(&mut self, path: &Path) -> Result<(), String> {
+        self.send(vec![
+            json!("loadfile"),
+            json!(path.to_string_lossy()),
+            json!("append"),
+        ])
+        .map(|_| ())
+    }
+
     pub fn prev(&mut self) -> Result<(), String> {
         self.send(vec![json!("playlist-prev")]).map(|_| ())
     }

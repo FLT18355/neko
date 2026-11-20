@@ -109,10 +109,14 @@ fn main() {
         }
     };
 
-    let mut tracks = library::scan_dirs(&dirs);
+    let mut index = library::Index::load();
+    let mut tracks = library::scan_dirs(&dirs, &mut index);
+    if let Err(err) = index.save() {
+        eprintln!("保存曲库索引失败：{err}");
+    }
     library::sort_tracks(&mut tracks, &cfg.sort);
     let cache = Cache::load();
-    let mut app = App::new(cfg, cache, mpv, tracks, dirs);
+    let mut app = App::new(cfg, cache, mpv, tracks, dirs, index);
     let mut ui_state = ui::UiState::default();
     let mut terminal = match ui::Terminal::enter() {
         Ok(terminal) => terminal,

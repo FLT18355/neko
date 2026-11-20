@@ -166,6 +166,21 @@ fn handle_modal(app: &mut App, key: KeyEvent) {
             KeyCode::Char('r') => app.reset_eq(),
             _ => {}
         },
+        Modal::Browse => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
+            KeyCode::Up | KeyCode::Char('k') => app.browse_move(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.browse_move(1),
+            KeyCode::Left | KeyCode::Char('h') => app.browse_cycle(-1),
+            KeyCode::Right | KeyCode::Char('l') => app.browse_cycle(1),
+            KeyCode::Tab => app.browse_cycle(1),
+            KeyCode::BackTab => app.browse_cycle(-1),
+            KeyCode::Enter => app.select_browse_group(),
+            KeyCode::Home => app.browse_selected = 0,
+            KeyCode::End => {
+                app.browse_selected = app.browse_groups.len().saturating_sub(1);
+            }
+            _ => {}
+        },
         Modal::AudioDevice => match key.code {
             KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
             KeyCode::Up | KeyCode::Char('k') => app.device_move(-1),

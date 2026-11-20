@@ -151,6 +151,11 @@ fn draw_header(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Ve
         ("收藏", app.view == "fav"),
         ("最近", app.view == "recent"),
         ("文件夹", app.view == "folder"),
+        (
+            "浏览",
+            matches!(app.view.as_str(), "album" | "artist" | "genre")
+                || app.modal == Some(Modal::Browse),
+        ),
     ];
     for (index, (label, active)) in tabs.into_iter().enumerate() {
         let hovered = hover == Some(Hit::Tab(index));
@@ -176,6 +181,9 @@ fn draw_header(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Ve
         format!("{} {:.0}%", VOL, state.volume)
     };
     let mut status = format!("{} · {volume}", app.mode_label());
+    if app.cfg.radio {
+        status.push_str(" · 电台");
+    }
     if (state.speed - 1.0).abs() > 0.001 {
         status.push_str(&format!(" · {:.2}x", state.speed));
     }

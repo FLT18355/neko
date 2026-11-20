@@ -47,6 +47,7 @@ pub struct Config {
     pub eq_gains: Vec<f64>,
     pub audio_device: String,
     pub resume: bool,
+    pub radio: bool,
     pub keys: HashMap<String, String>,
 }
 
@@ -69,6 +70,7 @@ impl Default for Config {
             eq_gains: vec![0.0; 10],
             audio_device: String::new(),
             resume: true,
+            radio: false,
             keys: HashMap::new(),
         }
     }
