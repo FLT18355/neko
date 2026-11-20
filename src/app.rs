@@ -222,6 +222,7 @@ impl App {
         let cached_position = cache.last_position;
         let cached_selected = cache.selected_path.clone();
         let cached_last = cache.last_path.clone();
+        let had_last = cached_selected.is_some() || cached_last.is_some();
         let bindings = build_bindings(&cfg.keys);
         let playlists = cfg.playlists.clone();
         if !attached {
@@ -376,6 +377,9 @@ impl App {
                 app.notify("按 ? 看快捷键；空格播放，q 退出");
             }
         }
+        if !attached && app.cfg.autoplay && !restored && app.mpv.state.path.is_none() && had_last {
+            app.play_selected();
+        }
         app
     }
 
@@ -423,12 +427,18 @@ impl App {
             let _ = self.mpv.seek(target, true);
             self.last_position = target;
         }
+        let autoplay = self.cfg.autoplay;
+        if autoplay {
+            let _ = self.mpv.set_prop("pause", json!(false));
+            self.mpv.refresh();
+        }
         self.lrc = Lrc::load_for(&path);
         self.lrc_path = Some(path);
-        self.notify(format!(
-            "已恢复上次队列 · {} 首 · 空格继续",
-            self.session.len()
-        ));
+        self.notify(if autoplay {
+            format!("继续上次播放 · {} 首", self.session.len())
+        } else {
+            format!("已恢复上次队列 · {} 首 · 空格继续", self.session.len())
+        });
         true
     }
 
@@ -476,27 +486,12 @@ impl App {
         match self.mpv.state.path.clone() {
             Some(path) => {
                 if self.last_path.as_ref() != Some(&path) {
-                    if let Some(old) = self.last_path.take() {
-                        let finished = self
-                            .last_duration
-                            .is_some_and(|duration| self.last_position > duration - 3.0);
-                        if self.last_position >= 1.0 && !finished {
-                            self.cache
-                                .positions
-                                .insert(old.to_string_lossy().to_string(), self.last_position);
-                        }
-                    }
                     let key = path.to_string_lossy().to_string();
                     self.last_path = Some(path.clone());
                     self.last_position = self.mpv.state.time_pos.unwrap_or(0.0);
                     self.last_duration = self.mpv.state.duration;
                     self.cache.add_recent(&path);
                     *self.cache.plays.entry(key.clone()).or_insert(0) += 1;
-                    let resume = self
-                        .cfg
-                        .resume
-                        .then(|| self.cache.positions.get(&key).copied())
-                        .flatten();
                     let _ = self.cache.save();
                     self.lrc = Lrc::load_for(&path);
                     self.lrc_path = Some(path.clone());
@@ -511,18 +506,7 @@ impl App {
                                 .map(|stem| stem.to_string_lossy().to_string())
                         })
                         .unwrap_or_else(|| "下一首".into());
-                    if let Some(position) =
-                        resume.and_then(|value| resume_target(value, self.mpv.state.duration))
-                    {
-                        let _ = self.mpv.seek(position, true);
-                        self.last_position = position;
-                        self.notify(format!(
-                            "继续播放 · {title} · {}",
-                            library::duration_text(position)
-                        ));
-                    } else {
-                        self.notify(format!("正在播放 · {title}"));
-                    }
+                    self.notify(format!("正在播放 · {title}"));
                 } else {
                     if let Some(position) = self.mpv.state.time_pos {
                         self.last_position = position;
@@ -533,16 +517,7 @@ impl App {
                 }
             }
             None => {
-                if let Some(old) = self.last_path.take() {
-                    let finished = self
-                        .last_duration
-                        .is_some_and(|duration| self.last_position > duration - 3.0);
-                    if self.last_position >= 1.0 && !finished {
-                        self.cache
-                            .positions
-                            .insert(old.to_string_lossy().to_string(), self.last_position);
-                    }
-                }
+                self.last_path = None;
                 self.last_position = 0.0;
                 self.last_duration = None;
             }
@@ -600,9 +575,6 @@ impl App {
     pub fn save(&mut self) {
         if let Some(path) = self.mpv.state.path.clone() {
             let position = self.mpv.state.time_pos.unwrap_or(self.last_position);
-            self.cache
-                .positions
-                .insert(path.to_string_lossy().to_string(), position);
             self.cache.update_last(&path, position);
         }
         let selected_path = self

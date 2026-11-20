@@ -19,7 +19,6 @@ pub struct Cache {
     pub queue_pos: usize,
     pub plays: HashMap<String, u64>,
     pub ratings: HashMap<String, u8>,
-    pub positions: HashMap<String, f64>,
     pub listen_seconds: HashMap<String, f64>,
     pub total_seconds: f64,
 }

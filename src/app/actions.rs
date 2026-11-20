@@ -1163,6 +1163,15 @@ impl App {
         });
     }
 
+    pub(crate) fn toggle_autoplay(&mut self) {
+        self.cfg.autoplay = !self.cfg.autoplay;
+        self.notify(if self.cfg.autoplay {
+            "启动自动播放 · 开启"
+        } else {
+            "启动自动播放 · 关闭"
+        });
+    }
+
     pub(crate) fn toggle_radio(&mut self) {
         self.cfg.radio = !self.cfg.radio;
         if self.cfg.radio {
@@ -1397,6 +1406,15 @@ impl App {
                 if self.cfg.resume { "开启" } else { "关闭" }.into(),
             ),
             (
+                "启动自动播放".into(),
+                if self.cfg.autoplay {
+                    "开启"
+                } else {
+                    "关闭"
+                }
+                .into(),
+            ),
+            (
                 "智能电台".into(),
                 if self.cfg.radio { "开启" } else { "关闭" }.into(),
             ),
@@ -1488,25 +1506,30 @@ impl App {
             }
             15 => {
                 if delta != 0 {
-                    self.toggle_radio();
+                    self.toggle_autoplay();
                 }
             }
             16 => {
                 if delta != 0 {
-                    self.open_modal(Modal::Keybindings);
+                    self.toggle_radio();
                 }
             }
             17 => {
                 if delta != 0 {
-                    self.open_modal(Modal::AudioDevice);
+                    self.open_modal(Modal::Keybindings);
                 }
             }
             18 => {
                 if delta != 0 {
+                    self.open_modal(Modal::AudioDevice);
+                }
+            }
+            19 => {
+                if delta != 0 {
                     self.clear_recent();
                 }
             }
-            19 | 20 => {}
+            20 | 21 => {}
             _ => {}
         }
     }
