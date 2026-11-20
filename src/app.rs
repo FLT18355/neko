@@ -64,6 +64,8 @@ pub struct App {
     pub(crate) view: String,
     pub(crate) filter: String,
     pub(crate) session: Vec<Track>,
+    /// 随机模式前的原始队列顺序，退出随机时恢复。
+    pub(crate) order_session: Vec<Track>,
     pub(crate) mode: String,
     pub(crate) sort: String,
     pub(crate) lrc: Option<Lrc>,
@@ -217,7 +219,11 @@ impl App {
         let cached_filter = cache.filter.clone();
         let cached_folder = cache.folder.clone();
         let cached_group = cache.group.clone();
-        let cached_queue = cache.queue.clone();
+        let cached_queue = if cache.order_queue.is_empty() {
+            cache.queue.clone()
+        } else {
+            cache.order_queue.clone()
+        };
         let cached_queue_pos = cache.queue_pos;
         let cached_position = cache.last_position;
         let cached_selected = cache.selected_path.clone();
@@ -256,6 +262,7 @@ impl App {
             view: cached_view,
             filter: cached_filter,
             session: Vec::new(),
+            order_session: Vec::new(),
             mode,
             sort,
             lrc: None,
@@ -328,6 +335,18 @@ impl App {
         let mut restored = false;
         if attached {
             app.sync_session_from_mpv();
+            app.order_session = app
+                .cache
+                .order_queue
+                .iter()
+                .filter_map(|path| {
+                    let path = PathBuf::from(path);
+                    app.tracks.iter().find(|track| track.path == path).cloned()
+                })
+                .collect();
+            if app.order_session.is_empty() {
+                app.order_session = app.session.clone();
+            }
             if let Some(path) = app.mpv.state.path.clone() {
                 app.last_path = Some(path.clone());
                 app.last_position = app.mpv.state.time_pos.unwrap_or(0.0);
@@ -417,6 +436,7 @@ impl App {
             return false;
         };
         self.session = queue;
+        self.order_session = self.session.clone();
         self.last_path = Some(path.clone());
         self.last_position = last_position;
         self.last_duration = self.mpv.state.duration;
@@ -426,6 +446,11 @@ impl App {
         {
             let _ = self.mpv.seek(target, true);
             self.last_position = target;
+        }
+        if self.mode == "shuffle" {
+            let _ = self.mpv.shuffle_playlist();
+            self.mpv.refresh();
+            self.sync_session_from_mpv();
         }
         let autoplay = self.cfg.autoplay;
         if autoplay {
@@ -586,6 +611,11 @@ impl App {
         self.cache.group = self.group_filter.clone();
         self.cache.queue = self
             .session
+            .iter()
+            .map(|track| track.path.to_string_lossy().to_string())
+            .collect();
+        self.cache.order_queue = self
+            .order_session
             .iter()
             .map(|track| track.path.to_string_lossy().to_string())
             .collect();

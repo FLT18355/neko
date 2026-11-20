@@ -16,6 +16,7 @@ pub struct Cache {
     pub group: String,
     pub selected_path: Option<String>,
     pub queue: Vec<String>,
+    pub order_queue: Vec<String>,
     pub queue_pos: usize,
     pub plays: HashMap<String, u64>,
     pub ratings: HashMap<String, u8>,

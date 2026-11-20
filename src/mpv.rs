@@ -454,6 +454,10 @@ impl Mpv {
         self.send(vec![json!("playlist-shuffle")]).map(|_| ())
     }
 
+    pub fn unshuffle_playlist(&mut self) -> Result<(), String> {
+        self.send(vec![json!("playlist-unshuffle")]).map(|_| ())
+    }
+
     pub fn seek(&mut self, seconds: f64, absolute: bool) -> Result<(), String> {
         let mode = if absolute { "absolute" } else { "relative" };
         self.send(vec![json!("seek"), json!(seconds), json!(mode)])

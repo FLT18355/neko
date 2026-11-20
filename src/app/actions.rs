@@ -154,6 +154,7 @@ impl App {
             return;
         }
         let title = queue[position].title.clone();
+        self.order_session = queue.clone();
         self.session = queue;
         if self.mode == "shuffle" {
             let _ = self.mpv.shuffle_playlist();
@@ -330,6 +331,7 @@ impl App {
             .iter()
             .position(|mode| *mode == self.mode)
             .unwrap_or(1);
+        let was_shuffle = self.mode == "shuffle";
         let chosen = MODES[(index + 1) % MODES.len()].to_string();
         if let Err(err) = self.mpv.apply_mode(&chosen) {
             self.notify(format!("切换模式失败：{err}"));
@@ -338,9 +340,16 @@ impl App {
         self.mode = chosen.clone();
         self.cfg.mode = chosen;
         if self.mode == "shuffle" && !self.session.is_empty() {
+            self.order_session = self.session.clone();
             let _ = self.mpv.shuffle_playlist();
             self.mpv.refresh();
             self.sync_session_from_mpv();
+        } else if was_shuffle {
+            // mpv 会记住 shuffle 前的顺序，退出随机时恢复原队列。
+            let _ = self.mpv.unshuffle_playlist();
+            self.mpv.refresh();
+            self.sync_session_from_mpv();
+            self.order_session = self.session.clone();
         }
         self.notify(format!("播放模式 · {}", self.mode_label()));
     }
@@ -349,6 +358,9 @@ impl App {
         if self.session.is_empty() {
             self.notify("先播放一首歌再打乱喵");
             return;
+        }
+        if self.mode != "shuffle" {
+            self.order_session = self.session.clone();
         }
         self.mode = "shuffle".into();
         self.cfg.mode = "shuffle".into();
@@ -1271,7 +1283,8 @@ impl App {
         let track = candidates[pick].1.clone();
         self.radio_at = Some(now);
         if self.mpv.append_track(&track.path).is_ok() {
-            self.session.push(track);
+            self.session.push(track.clone());
+            self.order_session.push(track);
             self.mpv.refresh();
             self.sync_session_from_mpv();
         }
@@ -1572,6 +1585,11 @@ impl App {
         self.queue_selected = to as usize;
         self.mpv.refresh();
         self.sync_session_from_mpv();
+        if self.mode != "shuffle" && (from as usize) < self.order_session.len() {
+            let track = self.order_session.remove(from as usize);
+            let to = (to as usize).min(self.order_session.len());
+            self.order_session.insert(to, track);
+        }
         self.notify("队列顺序已更新");
     }
 
@@ -1580,17 +1598,19 @@ impl App {
             return;
         }
         let index = self.queue_selected;
-        let removed = self.session[index].title.clone();
+        let removed = self.session[index].clone();
         if let Err(err) = self.mpv.playlist_remove(index as i64) {
             self.notify(format!("移除失败：{err}"));
             return;
         }
         self.mpv.refresh();
         self.sync_session_from_mpv();
+        self.order_session
+            .retain(|track| track.path != removed.path);
         self.queue_selected = self
             .queue_selected
             .min(self.session.len().saturating_sub(1));
-        self.notify(format!("已移出队列 · {removed}"));
+        self.notify(format!("已移出队列 · {}", removed.title));
     }
 
     pub(crate) fn queue_clear(&mut self) {
@@ -1601,6 +1621,7 @@ impl App {
         let _ = self.mpv.playlist_clear();
         self.mpv.refresh();
         self.session.clear();
+        self.order_session.clear();
         self.queue_selected = 0;
         self.last_path = None;
         self.notify("队列已清空");
