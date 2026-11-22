@@ -393,6 +393,11 @@ pub enum Hit {
     LyricsFull,
     LyricsFullBack,
     QueueRow(usize),
+    HomeRecent(usize),
+    HomeFavorite(usize),
+    HomePlaylist(usize),
+    HomeStats,
+    HomePlaylists,
     SettingRow(usize),
     SettingLeft(usize),
     SettingRight(usize),
@@ -408,11 +413,12 @@ pub enum Hit {
 impl Hit {
     pub fn label(self) -> &'static str {
         match self {
-            Hit::Tab(0) => "全部歌曲 · 1",
-            Hit::Tab(1) => "收藏 · 2",
-            Hit::Tab(2) => "最近播放 · 3",
-            Hit::Tab(3) => "文件夹 · 4",
-            Hit::Tab(4) => "浏览曲库 · Ctrl+A",
+            Hit::Tab(0) => "首页 · h",
+            Hit::Tab(1) => "全部歌曲 · 1",
+            Hit::Tab(2) => "收藏 · 2",
+            Hit::Tab(3) => "最近播放 · 3",
+            Hit::Tab(4) => "文件夹 · 4",
+            Hit::Tab(5) => "浏览曲库 · Ctrl+A",
             Hit::Tab(_) => "视图",
             Hit::Row(_) => "单击选中 · 再点一次播放",
             Hit::PlayPause => "播放 / 暂停 · 空格",
@@ -445,6 +451,11 @@ impl Hit {
             Hit::LyricsFull => "全屏歌词 · F",
             Hit::LyricsFullBack => "返回 · Esc",
             Hit::QueueRow(_) => "单击选中 · 再点一次播放",
+            Hit::HomeRecent(_) => "播放这首最近曲目",
+            Hit::HomeFavorite(_) => "播放这首收藏",
+            Hit::HomePlaylist(_) => "打开歌单",
+            Hit::HomeStats => "收听统计 · v",
+            Hit::HomePlaylists => "自建歌单 · Ctrl+P",
             Hit::SettingRow(_) => "单击选中 · 双击调整",
             Hit::SettingLeft(_) | Hit::SettingRight(_) => "点击调整",
             Hit::ModalRow(_) => "单击选中 · 双击确认",
@@ -645,22 +656,25 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                 return;
             };
             match hit {
-                Hit::Tab(index) => {
-                    if index == 3 {
-                        app.open_modal(Modal::Folders);
-                    } else if index == 4 {
-                        app.open_browse();
-                    } else {
-                        let view = ["all", "fav", "recent"][index.min(2)];
-                        app.set_view(view);
-                    }
-                }
+                Hit::Tab(index) => match index {
+                    0 => app.set_view("home"),
+                    1 => app.set_view("all"),
+                    2 => app.set_view("fav"),
+                    3 => app.set_view("recent"),
+                    4 => app.open_modal(Modal::Folders),
+                    _ => app.open_browse(),
+                },
                 Hit::Row(index) => {
                     app.selected = index;
                     if ui.double_click(hit) {
                         app.play_selected();
                     }
                 }
+                Hit::HomeRecent(index) => app.play_home_recent(index),
+                Hit::HomeFavorite(index) => app.play_home_favorite(index),
+                Hit::HomePlaylist(index) => app.open_home_playlist(index),
+                Hit::HomeStats => app.open_modal(Modal::Stats),
+                Hit::HomePlaylists => app.open_modal(Modal::Playlists),
                 Hit::Scrollbar => {
                     ui.dragging_scrollbar = true;
                     jump_scrollbar(app, ui, mouse.row);

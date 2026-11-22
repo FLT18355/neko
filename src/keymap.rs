@@ -34,6 +34,7 @@ pub enum Action {
     ViewFav,
     ViewRecent,
     ViewFolder,
+    Home,
     CycleView,
     Search,
     Directory,
@@ -61,7 +62,7 @@ pub enum Action {
     ClearFilter,
 }
 
-pub const ACTIONS: [Action; 57] = [
+pub const ACTIONS: [Action; 58] = [
     Action::Quit,
     Action::PlayPause,
     Action::PlaySelected,
@@ -94,6 +95,7 @@ pub const ACTIONS: [Action; 57] = [
     Action::ViewFav,
     Action::ViewRecent,
     Action::ViewFolder,
+    Action::Home,
     Action::CycleView,
     Action::Search,
     Action::Directory,
@@ -159,6 +161,7 @@ pub const DEFAULT_BINDINGS: &[(Action, &str)] = &[
     (Action::ViewFav, "2"),
     (Action::ViewRecent, "3"),
     (Action::ViewFolder, "4"),
+    (Action::Home, "h"),
     (Action::CycleView, "tab"),
     (Action::Search, "/"),
     (Action::Directory, "o"),
@@ -221,6 +224,7 @@ impl Action {
             Action::ViewFav => "view_fav",
             Action::ViewRecent => "view_recent",
             Action::ViewFolder => "view_folder",
+            Action::Home => "home",
             Action::CycleView => "cycle_view",
             Action::Search => "search",
             Action::Directory => "directory",
@@ -283,6 +287,7 @@ impl Action {
             Action::ViewFav => "收藏视图",
             Action::ViewRecent => "最近播放视图",
             Action::ViewFolder => "文件夹视图",
+            Action::Home => "回到首页",
             Action::CycleView => "循环切换视图",
             Action::Search => "搜索曲目",
             Action::Directory => "音乐目录列表",

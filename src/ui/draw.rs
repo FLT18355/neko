@@ -1,3 +1,4 @@
+mod home;
 mod views;
 
 use super::*;
@@ -32,6 +33,16 @@ pub fn render(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec
     let separator_y = footer_y.saturating_sub(1);
     let body_y = 2usize;
     let body_height = separator_y.saturating_sub(body_y);
+
+    if app.view == "home" {
+        home::draw_home(canvas, app, body_y, body_height, hover, hits);
+        draw_rainbow_line(canvas, separator_y);
+        draw_footer(canvas, app, footer_y, width, height, hover, hits);
+        if let Some(modal) = app.drawn_modal() {
+            views::draw_modal(canvas, app, modal, hover, hits);
+        }
+        return;
+    }
 
     let left_x = 1;
     let left_max = width.saturating_sub(38).max(32);
@@ -147,6 +158,7 @@ fn draw_header(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Ve
 
     let mut x = 20;
     let tabs = [
+        ("首页", app.view == "home"),
         ("全部", app.view == "all"),
         ("收藏", app.view == "fav"),
         ("最近", app.view == "recent"),
@@ -160,10 +172,16 @@ fn draw_header(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Ve
     for (index, (label, active)) in tabs.into_iter().enumerate() {
         let hovered = hover == Some(Hit::Tab(index));
         let color = accent(index);
-        let style = if active {
+        let style = if active && !app.transparent {
             Style::new(ink_on(color), color).bold()
-        } else if hovered {
+        } else if active {
+            Style::new(color, crust()).bold()
+        } else if hovered && !app.transparent {
             Style::new(selected_fg(), surface0()).bold()
+        } else if hovered {
+            Style::new(selected_fg(), crust()).bold()
+        } else if app.transparent {
+            Style::new(mix(color, overlay0(), 0.45), crust())
         } else {
             Style::new(color, crust()).bold()
         };
@@ -197,13 +215,8 @@ fn draw_header(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Ve
     let clock_text = format!("{} {}", CLOCK, clock::now());
     let clock_width = text_width(&clock_text);
     let clock_x = width.saturating_sub(clock_width + 2);
-    if clock_width + 20 < width {
-        canvas.put(
-            clock_x,
-            0,
-            &clock_text,
-            Style::new(peach(), crust()).bold(),
-        );
+    if clock_width + 20 < width && clock_x > x + 2 {
+        canvas.put(clock_x, 0, &clock_text, Style::new(peach(), crust()).bold());
     }
     let status_width = text_width(&status);
     if status_width + x + 3 < clock_x {
@@ -1021,7 +1034,7 @@ fn draw_chip(
         return x;
     }
     let active = hit.is_some() && hover == hit;
-    let background = if active {
+    let background = if active && !app.transparent {
         surface1()
     } else if app.transparent {
         mantle()
@@ -1094,7 +1107,11 @@ fn draw_footer(
         1,
         Style::new(
             txt(),
-            if app.transparent { mantle() } else { surface0() },
+            if app.transparent {
+                mantle()
+            } else {
+                surface0()
+            },
         ),
     );
     canvas.put(
@@ -1115,7 +1132,11 @@ fn draw_footer(
         (
             if app.mpv.state.pause { PLAY } else { PAUSE },
             Hit::PlayPause,
-            if app.mpv.state.pause { "继续" } else { "暂停" },
+            if app.mpv.state.pause {
+                "继续"
+            } else {
+                "暂停"
+            },
         ),
         (NEXT, Hit::Next, "下一首"),
         (REPEAT, Hit::Mode, "模式"),
@@ -1142,6 +1163,7 @@ fn draw_footer(
             icon,
             label,
             accent(index + 3),
+            app.transparent,
             hover,
             hits,
         );
@@ -1158,6 +1180,7 @@ fn control(
     icon: &str,
     label: &str,
     color: Rgb,
+    transparent: bool,
     hover: Option<Hit>,
     hits: &mut Vec<(Hit, Rect)>,
 ) -> usize {
@@ -1171,7 +1194,7 @@ fn control(
         return x;
     }
     let active = hover == Some(hit);
-    let (fg, bg) = if active {
+    let (fg, bg) = if active && !transparent {
         (ink_on(color), color)
     } else {
         (color, mantle())

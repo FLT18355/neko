@@ -81,6 +81,8 @@ pub struct App {
     pub(crate) transparent: bool,
     pub(crate) search_original: Option<String>,
     pub(crate) selected: usize,
+    /// 首页最近播放列表的选中项。
+    pub(crate) home_selected: usize,
     pub(crate) toast: Option<(String, Instant)>,
     pub(crate) modal: Option<Modal>,
     /// 正在滑出的弹窗，动画结束后清掉。
@@ -209,12 +211,14 @@ impl App {
         cfg.theme = theme::set(&cfg.theme).to_string();
         cfg.eq_gains.truncate(EQ_BANDS.len());
         cfg.eq_gains.resize(EQ_BANDS.len(), 0.0);
-        let cached_view = if ["all", "fav", "recent", "folder", "album", "artist", "genre"]
-            .contains(&cache.view.as_str())
+        let cached_view = if [
+            "home", "all", "fav", "recent", "folder", "album", "artist", "genre",
+        ]
+        .contains(&cache.view.as_str())
         {
             cache.view.clone()
         } else {
-            "all".into()
+            "home".into()
         };
         let cached_filter = cache.filter.clone();
         let cached_folder = cache.folder.clone();
@@ -280,6 +284,7 @@ impl App {
             transparent,
             search_original: None,
             selected: 0,
+            home_selected: 0,
             toast: None,
             modal: None,
             modal_closing: None,
@@ -475,8 +480,7 @@ impl App {
         let progress = (self.modal_anim_at.elapsed().as_secs_f32() / 0.16).min(1.0);
         if self.modal.is_some() {
             if self.modal_anim < 1.0 {
-                self.modal_anim =
-                    self.modal_anim_from + (1.0 - self.modal_anim_from) * progress;
+                self.modal_anim = self.modal_anim_from + (1.0 - self.modal_anim_from) * progress;
             }
         } else if self.modal_closing.is_some() {
             self.modal_anim = self.modal_anim_from * (1.0 - progress);
@@ -703,6 +707,9 @@ impl App {
             self.group_filter.clear();
         }
         self.selected = 0;
+        if view == "home" {
+            self.home_selected = 0;
+        }
         self.rebuild_visible();
     }
 
@@ -744,15 +751,26 @@ impl App {
 
     pub(crate) fn cycle_view(&mut self) {
         let next = match self.view.as_str() {
+            "home" => "all",
             "all" => "fav",
             "fav" => "recent",
             "recent" => "folder",
-            _ => "all",
+            _ => "home",
         };
         self.set_view(next);
     }
 
     pub(crate) fn move_selection(&mut self, delta: isize) {
+        if self.view == "home" {
+            let count = self.home_recent_count();
+            if count == 0 {
+                self.home_selected = 0;
+                return;
+            }
+            self.home_selected =
+                (self.home_selected as isize + delta).clamp(0, count as isize - 1) as usize;
+            return;
+        }
         if self.visible.is_empty() {
             self.selected = 0;
             return;
@@ -762,6 +780,13 @@ impl App {
     }
 
     pub(crate) fn select_edge(&mut self, last: bool) {
+        if self.view == "home" {
+            let count = self.home_recent_count();
+            if count > 0 {
+                self.home_selected = if last { count - 1 } else { 0 };
+            }
+            return;
+        }
         if !self.visible.is_empty() {
             self.selected = if last { self.visible.len() - 1 } else { 0 };
         }
@@ -789,7 +814,58 @@ impl App {
         self.session.get(index)
     }
 
+    pub(crate) fn home_recent(&self, limit: usize) -> Vec<Track> {
+        self.cache
+            .recent
+            .iter()
+            .filter_map(|path| {
+                let path = PathBuf::from(path);
+                self.tracks.iter().find(|track| track.path == path)
+            })
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) fn home_recent_track(&self, index: usize) -> Option<&Track> {
+        self.cache
+            .recent
+            .iter()
+            .filter_map(|path| {
+                let path = PathBuf::from(path);
+                self.tracks.iter().find(|track| track.path == path)
+            })
+            .nth(index)
+    }
+
+    pub(crate) fn home_recent_count(&self) -> usize {
+        self.cache
+            .recent
+            .iter()
+            .filter(|path| {
+                let path = PathBuf::from(path.as_str());
+                self.tracks.iter().any(|track| track.path == path)
+            })
+            .count()
+    }
+
+    pub(crate) fn home_favorites(&self, limit: usize) -> Vec<Track> {
+        self.cfg
+            .favorites
+            .iter()
+            .filter_map(|path| {
+                let path = PathBuf::from(path);
+                self.tracks.iter().find(|track| track.path == path)
+            })
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
     pub(crate) fn selected_track(&self) -> Option<&Track> {
+        if self.view == "home" {
+            return self.home_recent_track(self.home_selected);
+        }
         self.visible
             .get(self.selected)
             .map(|&index| &self.tracks[index])
@@ -805,6 +881,7 @@ impl App {
 
     pub(crate) fn view_label(&self) -> String {
         match self.view.as_str() {
+            "home" => "首页".into(),
             "fav" => "收藏".into(),
             "recent" => "最近".into(),
             "folder" => {

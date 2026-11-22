@@ -93,6 +93,7 @@ impl App {
             Action::ViewFav => self.set_view("fav"),
             Action::ViewRecent => self.set_view("recent"),
             Action::ViewFolder => self.open_modal(Modal::Folders),
+            Action::Home => self.set_view("home"),
             Action::CycleView => self.cycle_view(),
             Action::Search => self.open_modal(Modal::Search),
             Action::Directory => self.open_modal(Modal::Directory),
@@ -127,6 +128,16 @@ impl App {
         }
     }
     pub(crate) fn play_selected(&mut self) {
+        if self.view == "home" {
+            let queue = self.home_recent(usize::MAX);
+            if queue.is_empty() {
+                self.notify("最近还没有播放记录喵，先挑一首吧");
+                return;
+            }
+            let position = self.home_selected.min(queue.len() - 1);
+            self.start_queue(queue, position);
+            return;
+        }
         if self.visible.is_empty() {
             self.notify("这里没有歌喵，换个视图或目录吧");
             return;
@@ -137,6 +148,35 @@ impl App {
             .map(|&index| self.tracks[index].clone())
             .collect();
         self.start_queue(queue, self.selected);
+    }
+
+    pub(crate) fn play_home_recent(&mut self, position: usize) {
+        let queue = self.home_recent(usize::MAX);
+        if queue.is_empty() {
+            self.notify("最近还没有播放记录喵");
+            return;
+        }
+        let position = position.min(queue.len() - 1);
+        self.home_selected = position;
+        self.start_queue(queue, position);
+    }
+
+    pub(crate) fn play_home_favorite(&mut self, position: usize) {
+        let queue = self.home_favorites(usize::MAX);
+        if queue.is_empty() {
+            self.notify("还没有收藏喵，按 f 收藏当前曲目");
+            return;
+        }
+        let position = position.min(queue.len() - 1);
+        self.start_queue(queue, position);
+    }
+
+    pub(crate) fn open_home_playlist(&mut self, position: usize) {
+        if position >= self.playlists.len() {
+            return;
+        }
+        self.playlist_selected = position;
+        self.open_modal(Modal::PlaylistTracks);
     }
 
     pub(crate) fn start_queue(&mut self, queue: Vec<library::Track>, position: usize) {
