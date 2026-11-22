@@ -627,12 +627,13 @@ fn draw_recent_panel(
         let y = inner_y + index;
         let selected = app.home_selected == index;
         let hovered = hover == Some(Hit::HomeRecent(index));
+        let active = selected || hovered;
         let background = if app.transparent {
             mantle()
         } else if selected {
             surface0()
         } else if hovered {
-            mix(mantle(), surface0(), 0.6)
+            mix(mantle(), surface0(), 0.8)
         } else if index % 2 == 1 {
             mix(mantle(), surface0(), 0.18)
         } else {
@@ -642,14 +643,20 @@ fn draw_recent_panel(
         canvas.put(
             inner_x,
             y,
-            if selected { "▌" } else { " " },
-            Style::new(pink(), background),
+            if selected {
+                "▌"
+            } else if hovered {
+                "▏"
+            } else {
+                " "
+            },
+            Style::new(if active { pink() } else { mauve() }, background),
         );
         canvas.put(
             inner_x + 1,
             y,
             &format!("{:>2}", index + 1),
-            Style::new(if selected { pink() } else { accent(index) }, background).bold(),
+            Style::new(if active { pink() } else { accent(index) }, background).bold(),
         );
         let duration = library::duration_text(track.meta.duration);
         let duration_w = if inner_w >= 20 {
@@ -662,14 +669,14 @@ fn draw_recent_panel(
             inner_x + 4,
             y,
             &truncate(&track.title, title_w),
-            Style::new(if selected { txt() } else { sub1() }, background).bold(),
+            Style::new(if active { selected_fg() } else { sub1() }, background).bold(),
         );
         if duration_w > 0 {
             canvas.put(
                 inner_x + inner_w - duration_w,
                 y,
                 &duration,
-                Style::new(surface2(), background),
+                Style::new(if hovered { sub0() } else { surface2() }, background),
             );
         }
         hits.push((Hit::HomeRecent(index), Rect::new(inner_x, y, inner_w, 1)));
