@@ -176,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "neko"
-version = "0.2.10"
+version = "0.2.11"
 dependencies = [
  "crossterm",
  "libc",

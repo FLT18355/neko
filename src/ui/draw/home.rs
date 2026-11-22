@@ -727,14 +727,25 @@ fn draw_favorites_panel(
         let background = if app.transparent {
             mantle()
         } else if hovered {
-            mix(mantle(), surface0(), 0.6)
+            mix(mantle(), surface0(), 0.8)
         } else if index % 2 == 1 {
             mix(mantle(), surface0(), 0.18)
         } else {
             mantle()
         };
         canvas.fill(inner_x, y, inner_w, 1, Style::new(txt(), background));
-        canvas.put(inner_x, y, HEART, Style::new(maroon(), background).bold());
+        canvas.put(
+            inner_x,
+            y,
+            if hovered { "▏" } else { " " },
+            Style::new(if hovered { pink() } else { mauve() }, background),
+        );
+        canvas.put(
+            inner_x + 1,
+            y,
+            HEART,
+            Style::new(if hovered { pink() } else { maroon() }, background).bold(),
+        );
         let artist = if track.meta.artist.is_empty() {
             String::new()
         } else {
@@ -742,10 +753,10 @@ fn draw_favorites_panel(
         };
         let text = format!("{}{}", track.title, artist);
         canvas.put(
-            inner_x + 3,
+            inner_x + 4,
             y,
-            &truncate(&text, inner_w.saturating_sub(4)),
-            Style::new(if hovered { txt() } else { sub1() }, background),
+            &truncate(&text, inner_w.saturating_sub(5)),
+            Style::new(if hovered { selected_fg() } else { sub1() }, background).bold(),
         );
         hits.push((Hit::HomeFavorite(index), Rect::new(inner_x, y, inner_w, 1)));
     }
