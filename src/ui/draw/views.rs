@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::{App, Modal, SETTING_PULSE};
+use crate::app::{App, Modal, SETTING_PULSE, TRACK_MENU};
 use crate::keymap::ACTIONS;
 use crate::library;
 
@@ -343,6 +343,55 @@ pub fn draw_modal(
         Modal::Stats => draw_stats(canvas, app, hover, hits),
         Modal::Keybindings => draw_keybindings(canvas, app, hover, hits),
         Modal::Browse => draw_browse(canvas, app, hover, hits),
+        Modal::AddMusic => draw_input(
+            canvas,
+            app,
+            "添加音乐",
+            "音频文件或目录路径",
+            "Enter 复制到音乐目录 · 目录会递归找音频 · Esc 取消",
+            hover,
+            hits,
+        ),
+        Modal::RenameTrack => draw_input(
+            canvas,
+            app,
+            "重命名曲目",
+            "新文件名（扩展名自动保留）",
+            "Enter 保存 · 同时写入标题标签 · Esc 取消",
+            hover,
+            hits,
+        ),
+        Modal::Download => draw_input(
+            canvas,
+            app,
+            "从 B 站下载音乐",
+            "关键词 / BV / av / 链接（一次一个 id）",
+            "Enter 搜索，或把输入的 id 列出来让你选格式 · cookies 在设置里改",
+            hover,
+            hits,
+        ),
+        Modal::DownloadList => draw_download(canvas, app, hover, hits),
+        Modal::DownloadFormats => draw_formats(canvas, app, hover, hits),
+        Modal::TrackMenu => draw_track_menu(canvas, app, hover, hits),
+        Modal::DeleteTrack => draw_delete(canvas, app, hover, hits),
+        Modal::CookiesPath => draw_input(
+            canvas,
+            app,
+            "cookies 文件",
+            "路径（留空表示不发送）",
+            "Enter 保存 · 例如 ~/cookies.txt · Esc 返回设置",
+            hover,
+            hits,
+        ),
+        Modal::YtdlpPath => draw_input(
+            canvas,
+            app,
+            "yt-dlp 路径",
+            "可执行文件路径（留空用 PATH）",
+            "Enter 保存 · 例如 /usr/bin/yt-dlp · Esc 返回设置",
+            hover,
+            hits,
+        ),
     }
 }
 
@@ -711,14 +760,37 @@ fn draw_input(
         1,
         Style::new(txt(), surface0()),
     );
-    let available = width.saturating_sub(6);
-    let text = if text_width(&app.input) > available {
-        tail(&app.input, available.saturating_sub(1))
-    } else {
-        app.input.clone()
-    };
-    let input_x = canvas.put(x + 2, y + 3, &text, Style::new(txt(), surface0()));
-    canvas.put(input_x, y + 3, "▌", Style::new(pink(), surface0()).bold());
+    let available = width.saturating_sub(6).max(1);
+    let chars: Vec<char> = app.input.chars().collect();
+    let cursor = app.input_cursor.min(chars.len());
+    let char_width = |ch: char| UnicodeWidthChar::width(ch).unwrap_or(0);
+    // 光标始终留在可见区域内；长文本从光标左侧开始裁。
+    let mut start = 0usize;
+    while start < cursor {
+        let used: usize = chars[start..cursor].iter().map(|ch| char_width(*ch)).sum();
+        if used <= available.saturating_sub(1) {
+            break;
+        }
+        start += 1;
+    }
+    let mut text = String::new();
+    let mut used = 0usize;
+    for ch in &chars[start..] {
+        let w = char_width(*ch);
+        if used + w > available {
+            break;
+        }
+        text.push(*ch);
+        used += w;
+    }
+    canvas.put(x + 2, y + 3, &text, Style::new(txt(), surface0()));
+    let cursor_offset: usize = chars[start..cursor].iter().map(|ch| char_width(*ch)).sum();
+    canvas.put(
+        x + 2 + cursor_offset.min(available),
+        y + 3,
+        "▌",
+        Style::new(pink(), surface0()).bold(),
+    );
     if height >= 9 {
         canvas.put(
             x + 2,
@@ -727,6 +799,571 @@ fn draw_input(
             Style::new(overlay0(), mantle()),
         );
     }
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    button_x = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Confirm,
+        hover,
+        hits,
+    );
+    let _ = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Cancel,
+        hover,
+        hits,
+    );
+}
+
+fn draw_download(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
+    let width = 88;
+    let height = canvas.height().saturating_sub(4).clamp(12, 28);
+    let (x, y, width, height) = frame(canvas, width, height, "B 站音乐下载", hits);
+    let status = if app.dl_status.is_empty() {
+        "输入关键词或 BV 号，Enter 搜索喵"
+    } else {
+        app.dl_status.as_str()
+    };
+    let status_color = if app.dl_searching || app.dl_busy {
+        peach()
+    } else if app.dl_candidates.is_empty() {
+        overlay0()
+    } else {
+        sub1()
+    };
+    canvas.put(
+        x + 2,
+        y + 2,
+        &truncate(status, width.saturating_sub(4)),
+        Style::new(status_color, mantle()),
+    );
+    if app.dl_busy {
+        let bar_width = width.saturating_sub(16);
+        let ratio = (app.dl_progress / 100.0).clamp(0.0, 1.0);
+        let filled = (bar_width as f32 * ratio).round() as usize;
+        for column in 0..bar_width {
+            let (ch, color) = if column < filled {
+                ("━", rainbow(column as f64 / bar_width.max(1) as f64))
+            } else {
+                ("─", surface1())
+            };
+            canvas.put(x + 2 + column, y + 3, ch, Style::new(color, mantle()));
+        }
+        canvas.put(
+            x + 2 + bar_width + 2,
+            y + 3,
+            &format!("{:>3.0}%", app.dl_progress),
+            Style::new(peach(), mantle()).bold(),
+        );
+    } else {
+        canvas.put(
+            x + 2,
+            y + 3,
+            &format!("共 {} 首 · 下载目录见设置", app.dl_candidates.len()),
+            Style::new(surface2(), mantle()),
+        );
+    }
+
+    let list_top = y + 5;
+    let list_bottom = y + height.saturating_sub(3);
+    let rows = list_bottom.saturating_sub(list_top);
+    let total = app.dl_candidates.len();
+    if total == 0 {
+        let message = if app.dl_searching {
+            "搜索中… 结果会出现在这里"
+        } else if app.dl_busy {
+            "下载中… 可以关掉弹窗，下载会继续"
+        } else {
+            "还没有结果 · 按 s 返回输入关键词"
+        };
+        canvas.put(
+            x + 2,
+            list_top + 1,
+            &truncate(message, width.saturating_sub(4)),
+            Style::new(overlay0(), mantle()),
+        );
+    } else if rows > 0 {
+        let offset = app
+            .dl_selected
+            .saturating_sub(rows / 2)
+            .min(total.saturating_sub(rows));
+        for (row, candidate) in app.dl_candidates.iter().skip(offset).take(rows).enumerate() {
+            let index = offset + row;
+            let row_y = list_top + row;
+            let selected = index == app.dl_selected;
+            let row_hover = hover == Some(Hit::DownloadRow(index));
+            let background = if app.transparent {
+                mantle()
+            } else if selected {
+                surface0()
+            } else if row_hover {
+                mix(mantle(), surface0(), 0.5)
+            } else if index % 2 == 0 {
+                mix(mantle(), surface0(), 0.22)
+            } else {
+                mantle()
+            };
+            if !app.transparent {
+                canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), background));
+            }
+            canvas.put(
+                x + 1,
+                row_y,
+                if selected {
+                    "▌"
+                } else if row_hover {
+                    "▏"
+                } else {
+                    " "
+                },
+                Style::new(if selected { pink() } else { mauve() }, background),
+            );
+            hits.push((
+                Hit::DownloadRow(index),
+                Rect::new(x + 1, row_y, width - 2, 1),
+            ));
+            let checked = app.dl_checked.get(index).copied().unwrap_or(false);
+            let check_style = if checked {
+                Style::new(pink(), background).bold()
+            } else if hover == Some(Hit::DownloadCheck(index)) {
+                Style::new(lavender(), background)
+            } else {
+                Style::new(overlay0(), background)
+            };
+            canvas.put(
+                x + 2,
+                row_y,
+                if checked { "[✓]" } else { "[ ]" },
+                check_style,
+            );
+            hits.push((Hit::DownloadCheck(index), Rect::new(x + 2, row_y, 3, 1)));
+            canvas.put(
+                x + 6,
+                row_y,
+                &format!("{:>2}", index + 1),
+                Style::new(accent(index), background).bold(),
+            );
+            canvas.put(
+                x + 9,
+                row_y,
+                &truncate(&candidate.id, 14),
+                Style::new(
+                    if selected || row_hover {
+                        lavender()
+                    } else {
+                        surface2()
+                    },
+                    background,
+                ),
+            );
+            let meta = if candidate.duration > 0.0 {
+                format!(
+                    "{} · {}",
+                    truncate(&candidate.uploader, 16),
+                    library::duration_text(candidate.duration)
+                )
+            } else {
+                truncate(&candidate.uploader, 20)
+            };
+            let meta_width = text_width(&meta);
+            let title_width = width.saturating_sub(24 + meta_width + 3);
+            let title = if candidate.title == candidate.id {
+                ""
+            } else {
+                candidate.title.as_str()
+            };
+            canvas.put(
+                x + 24,
+                row_y,
+                &truncate(title, title_width),
+                Style::new(
+                    if selected || row_hover {
+                        selected_fg()
+                    } else {
+                        txt()
+                    },
+                    background,
+                )
+                .bold(),
+            );
+            if meta_width + 12 < width {
+                canvas.put(
+                    x + width - meta_width - 2,
+                    row_y,
+                    &meta,
+                    Style::new(surface2(), background),
+                );
+            }
+        }
+    }
+
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    button_x = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Back,
+        hover,
+        hits,
+    );
+    button_x = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Download,
+        hover,
+        hits,
+    );
+    let _ = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Close,
+        hover,
+        hits,
+    );
+    let hint = "空格勾选 · a 全选 · 双击下载";
+    let hint_width = text_width(hint);
+    if hint_width + 34 < width {
+        canvas.put(
+            x + width - hint_width - 2,
+            y + height - 2,
+            hint,
+            Style::new(overlay0(), mantle()),
+        );
+    }
+}
+
+fn draw_formats(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
+    let width = 88;
+    let height = canvas.height().saturating_sub(4).clamp(12, 26);
+    let (x, y, width, height) = frame(canvas, width, height, "选择下载格式", hits);
+    let title = app
+        .dl_pending
+        .first()
+        .map(|candidate| {
+            if candidate.title == candidate.id {
+                candidate.id.clone()
+            } else {
+                format!("{} · {}", candidate.id, candidate.title)
+            }
+        })
+        .unwrap_or_default();
+    canvas.put(
+        x + 2,
+        y + 2,
+        &truncate(&title, width.saturating_sub(4)),
+        Style::new(txt(), mantle()).bold(),
+    );
+    let count = app.dl_pending.len();
+    let status = if app.dl_formatting {
+        "正在读取格式列表…"
+    } else if app.dl_status.is_empty() {
+        "选择格式后按 Enter 下载"
+    } else {
+        app.dl_status.as_str()
+    };
+    canvas.put(
+        x + 2,
+        y + 3,
+        &truncate(
+            &format!("{status} · 将下载 {count} 首 · 选中 id 会作为 -f 参数"),
+            width.saturating_sub(4),
+        ),
+        Style::new(if app.dl_formatting { peach() } else { sub1() }, mantle()),
+    );
+
+    let list_top = y + 5;
+    let list_bottom = y + height.saturating_sub(3);
+    let rows = list_bottom.saturating_sub(list_top);
+    if app.dl_formats.is_empty() {
+        canvas.put(
+            x + 2,
+            list_top + 1,
+            if app.dl_formatting {
+                "读取中…"
+            } else {
+                "没有格式，按 s 返回选择曲目"
+            },
+            Style::new(overlay0(), mantle()),
+        );
+    } else if rows > 0 {
+        canvas.put(x + 2, y + 4, "ID", Style::new(surface2(), mantle()));
+        canvas.put(x + 13, y + 4, "类型", Style::new(surface2(), mantle()));
+        canvas.put(x + 19, y + 4, "容器", Style::new(surface2(), mantle()));
+        canvas.put(x + 24, y + 4, "码率", Style::new(surface2(), mantle()));
+        canvas.put(x + 32, y + 4, "大小", Style::new(surface2(), mantle()));
+        canvas.put(x + 41, y + 4, "备注", Style::new(surface2(), mantle()));
+        let offset = app
+            .dl_format_selected
+            .saturating_sub(rows / 2)
+            .min(app.dl_formats.len().saturating_sub(rows));
+        for (row, format) in app.dl_formats.iter().skip(offset).take(rows).enumerate() {
+            let index = offset + row;
+            let row_y = list_top + row;
+            let selected = index == app.dl_format_selected;
+            let row_hover = hover == Some(Hit::FormatRow(index));
+            let background = if app.transparent {
+                mantle()
+            } else if selected {
+                surface0()
+            } else if row_hover {
+                mix(mantle(), surface0(), 0.5)
+            } else if index % 2 == 0 {
+                mix(mantle(), surface0(), 0.22)
+            } else {
+                mantle()
+            };
+            if !app.transparent {
+                canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), background));
+            }
+            canvas.put(
+                x + 1,
+                row_y,
+                if selected {
+                    "▌"
+                } else if row_hover {
+                    "▏"
+                } else {
+                    " "
+                },
+                Style::new(if selected { pink() } else { mauve() }, background),
+            );
+            hits.push((Hit::FormatRow(index), Rect::new(x + 1, row_y, width - 2, 1)));
+            let id = if format.id.is_empty() {
+                "自动"
+            } else {
+                format.id.as_str()
+            };
+            canvas.put(
+                x + 2,
+                row_y,
+                &format!("{id:<10}"),
+                Style::new(
+                    if format.id.is_empty() {
+                        pink()
+                    } else {
+                        accent(index)
+                    },
+                    background,
+                )
+                .bold(),
+            );
+            let kind = match (format.audio, format.video) {
+                (true, true) => "音视频",
+                (true, false) => "音频",
+                _ => "视频",
+            };
+            canvas.put(
+                x + 13,
+                row_y,
+                kind,
+                Style::new(if format.video { maroon() } else { lavender() }, background),
+            );
+            canvas.put(
+                x + 19,
+                row_y,
+                &truncate(&format.ext, 4),
+                Style::new(sub1(), background),
+            );
+            let quality = if format.abr > 0.0 {
+                format!("{:.0}k", format.abr)
+            } else if format.height > 0 {
+                format!("{}p", format.height)
+            } else if format.tbr > 0.0 {
+                format!("{:.0}k", format.tbr)
+            } else {
+                "-".into()
+            };
+            canvas.put(
+                x + 24,
+                row_y,
+                &format!("{quality:<7}"),
+                Style::new(peach(), background),
+            );
+            let size = if format.size == 0 {
+                "-".to_string()
+            } else {
+                let mib = format.size as f64 / (1024.0 * 1024.0);
+                let value = if mib >= 1.0 {
+                    format!("{mib:.1}M")
+                } else {
+                    format!("{:.0}k", format.size as f64 / 1024.0)
+                };
+                if format.size_approx {
+                    format!("~{value}")
+                } else {
+                    value
+                }
+            };
+            canvas.put(
+                x + 32,
+                row_y,
+                &format!("{size:<8}"),
+                Style::new(
+                    if format.size_approx { yellow() } else { sub1() },
+                    background,
+                ),
+            );
+            canvas.put(
+                x + 41,
+                row_y,
+                &truncate(&format.note, width.saturating_sub(43)),
+                Style::new(overlay0(), background),
+            );
+        }
+    }
+
+    let limit = x + width - 2;
+    let mut button_x = x + 2;
+    button_x = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Back,
+        hover,
+        hits,
+    );
+    button_x = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Download,
+        hover,
+        hits,
+    );
+    let _ = modal_button(
+        canvas,
+        button_x,
+        y + height - 2,
+        limit,
+        ModalButton::Close,
+        hover,
+        hits,
+    );
+    let hint = "回车下载 · ↑/↓ 选格式";
+    let hint_width = text_width(hint);
+    if hint_width + 34 < width {
+        canvas.put(
+            x + width - hint_width - 2,
+            y + height - 2,
+            hint,
+            Style::new(overlay0(), mantle()),
+        );
+    }
+}
+
+fn draw_track_menu(
+    canvas: &mut Canvas,
+    app: &App,
+    hover: Option<Hit>,
+    hits: &mut Vec<(Hit, Rect)>,
+) {
+    let width = 38;
+    let height = TRACK_MENU.len() + 3;
+    let (x, y, width, _height) = frame(canvas, width, height, "曲目操作", hits);
+    for (index, (label, hint)) in TRACK_MENU.iter().enumerate() {
+        let row_y = y + 2 + index;
+        let selected = app.track_menu_selected == index;
+        let row_hover = hover == Some(Hit::TrackMenuRow(index));
+        let background = if selected {
+            surface0()
+        } else if row_hover {
+            mix(mantle(), surface0(), 0.5)
+        } else {
+            mantle()
+        };
+        if selected || row_hover {
+            canvas.fill(x + 1, row_y, width - 2, 1, Style::new(txt(), background));
+        }
+        canvas.put(
+            x + 2,
+            row_y,
+            if selected { "▸" } else { " " },
+            Style::new(pink(), background),
+        );
+        canvas.put(
+            x + 4,
+            row_y,
+            label,
+            Style::new(
+                if selected || row_hover {
+                    selected_fg()
+                } else {
+                    txt()
+                },
+                background,
+            )
+            .bold(),
+        );
+        let hint_width = text_width(hint);
+        canvas.put(
+            x + width - hint_width - 2,
+            row_y,
+            hint,
+            Style::new(overlay0(), background),
+        );
+        hits.push((
+            Hit::TrackMenuRow(index),
+            Rect::new(x + 1, row_y, width - 2, 1),
+        ));
+    }
+}
+
+fn draw_delete(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut Vec<(Hit, Rect)>) {
+    let width = 68;
+    let height = 10;
+    let (x, y, width, height) = frame(canvas, width, height, "删除音乐", hits);
+    canvas.put(
+        x + 2,
+        y + 2,
+        "确定要删除这个文件吗喵？",
+        Style::new(pink(), mantle()).bold(),
+    );
+    let (name, parent) = app
+        .pending_delete
+        .as_ref()
+        .map(|path| {
+            (
+                path.file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.display().to_string()),
+                path.parent()
+                    .map(|parent| parent.display().to_string())
+                    .unwrap_or_default(),
+            )
+        })
+        .unwrap_or_default();
+    canvas.put(
+        x + 2,
+        y + 4,
+        &truncate(&name, width.saturating_sub(4)),
+        Style::new(txt(), mantle()).bold(),
+    );
+    canvas.put(
+        x + 2,
+        y + 5,
+        &truncate(&parent, width.saturating_sub(4)),
+        Style::new(overlay0(), mantle()),
+    );
+    canvas.put(
+        x + 2,
+        y + 6,
+        "会从磁盘删除，不能撤销。",
+        Style::new(maroon(), mantle()),
+    );
     let limit = x + width - 2;
     let mut button_x = x + 2;
     button_x = modal_button(
@@ -1609,21 +2246,6 @@ fn draw_settings(canvas: &mut Canvas, app: &App, hover: Option<Hit>, hits: &mut 
 
 fn label_width() -> usize {
     12
-}
-
-fn tail(text: &str, width: usize) -> String {
-    let mut result = Vec::new();
-    let mut used = 0;
-    for ch in text.chars().rev() {
-        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + char_width > width {
-            break;
-        }
-        result.push(ch);
-        used += char_width;
-    }
-    result.reverse();
-    format!("…{}", result.into_iter().collect::<String>())
 }
 
 #[cfg(test)]

@@ -1,10 +1,11 @@
-use super::{App, EFFECTS, MODES, Modal};
+use super::{App, EFFECTS, MODES, Modal, TRACK_MENU};
 use crate::config;
 use crate::keymap::{self, Action};
 use crate::library;
 use crate::theme;
 use serde_json::json;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 fn parse_position(text: &str) -> Option<(f64, bool)> {
@@ -118,6 +119,10 @@ impl App {
             Action::AudioDevice => self.open_modal(Modal::AudioDevice),
             Action::Theme => self.cycle_theme(),
             Action::Keybindings => self.open_modal(Modal::Keybindings),
+            Action::AddMusic => self.begin_add_music(),
+            Action::RenameTrack => self.begin_rename_track(),
+            Action::DeleteTrack => self.begin_delete_track(),
+            Action::Download => self.open_download(),
             Action::ClearFilter => {
                 if !self.filter.is_empty() {
                     self.filter.clear();
@@ -676,27 +681,27 @@ impl App {
         self.modal_scroll = 0;
         self.capture_key = false;
         match modal {
-            Modal::Search => self.input = self.filter.clone(),
+            Modal::Search => self.set_input(self.filter.clone()),
             Modal::Directory => {
                 self.dir_selected = self
                     .dir_selected
                     .min(self.cfg.music_dirs.len().saturating_sub(1));
-                self.input.clear();
+                self.input_clear();
             }
-            Modal::DirAdd => self.input.clear(),
+            Modal::DirAdd => self.input_clear(),
             Modal::Settings => {
                 self.setting_selected = self.setting_selected.min(self.settings_rows().len() - 1);
-                self.input.clear();
+                self.input_clear();
             }
             Modal::Playlists => {
                 self.playlist_selected = self
                     .playlist_selected
                     .min(self.playlists.len().saturating_sub(1));
-                self.input.clear();
+                self.input_clear();
             }
             Modal::PlaylistTracks => {
                 self.playlist_song_selected = 0;
-                self.input.clear();
+                self.input_clear();
             }
             Modal::PlaylistName => {}
             Modal::Folders => {
@@ -705,11 +710,11 @@ impl App {
                     .iter()
                     .position(|(name, _)| *name == self.folder)
                     .unwrap_or(0);
-                self.input.clear();
+                self.input_clear();
             }
             Modal::Equalizer => {
                 self.eq_selected = 0;
-                self.input.clear();
+                self.input_clear();
             }
             Modal::AudioDevice => {
                 self.devices = self.mpv.audio_devices();
@@ -718,25 +723,39 @@ impl App {
                     .iter()
                     .position(|(name, _)| *name == self.cfg.audio_device)
                     .unwrap_or(0);
-                self.input.clear();
+                self.input_clear();
             }
             Modal::Stats => {
                 self.stats_scroll = 0;
-                self.input.clear();
+                self.input_clear();
             }
             Modal::Queue => {
                 self.queue_selected = self
                     .queue_selected
                     .min(self.session.len().saturating_sub(1));
-                self.input.clear();
+                self.input_clear();
             }
             Modal::Keybindings => {
                 self.keybind_selected = self
                     .keybind_selected
                     .min(keymap::ACTIONS.len().saturating_sub(1));
-                self.input.clear();
+                self.input_clear();
             }
-            _ => self.input.clear(),
+            Modal::Download => {}
+            Modal::DownloadList => {
+                self.dl_selected = self
+                    .dl_selected
+                    .min(self.dl_candidates.len().saturating_sub(1));
+            }
+            Modal::TrackMenu => self.track_menu_selected = 0,
+            Modal::DownloadFormats => {
+                self.dl_format_selected = self
+                    .dl_format_selected
+                    .min(self.dl_formats.len().saturating_sub(1));
+            }
+            Modal::CookiesPath => self.set_input(self.cfg.cookies.clone()),
+            Modal::YtdlpPath => self.set_input(self.cfg.ytdlp.clone()),
+            _ => self.input_clear(),
         }
     }
 
@@ -747,10 +766,76 @@ impl App {
             self.modal_anim_from = self.modal_anim;
             self.modal_anim_at = Instant::now();
         }
-        self.input.clear();
+        self.input_clear();
         self.modal_scroll = 0;
         self.search_original = None;
         self.capture_key = false;
+        self.pending_delete = None;
+    }
+
+    fn input_len(&self) -> usize {
+        self.input.chars().count()
+    }
+
+    pub(crate) fn set_input(&mut self, text: impl Into<String>) {
+        self.input = text.into();
+        self.input_cursor = self.input_len();
+    }
+
+    pub(crate) fn input_clear(&mut self) {
+        self.input.clear();
+        self.input_cursor = 0;
+    }
+
+    pub(crate) fn input_insert(&mut self, ch: char) {
+        let cursor = self.input_cursor.min(self.input_len());
+        let byte = self
+            .input
+            .char_indices()
+            .nth(cursor)
+            .map(|(index, _)| index)
+            .unwrap_or(self.input.len());
+        self.input.insert(byte, ch);
+        self.input_cursor = cursor + 1;
+    }
+
+    pub(crate) fn input_backspace(&mut self) {
+        let cursor = self.input_cursor.min(self.input_len());
+        if cursor == 0 {
+            return;
+        }
+        let byte = self
+            .input
+            .char_indices()
+            .nth(cursor - 1)
+            .map(|(index, _)| index)
+            .unwrap_or(0);
+        self.input.remove(byte);
+        self.input_cursor = cursor - 1;
+    }
+
+    pub(crate) fn input_delete(&mut self) {
+        let cursor = self.input_cursor.min(self.input_len());
+        let Some((byte, _)) = self.input.char_indices().nth(cursor) else {
+            return;
+        };
+        self.input.remove(byte);
+    }
+
+    pub(crate) fn input_left(&mut self) {
+        self.input_cursor = self.input_cursor.min(self.input_len()).saturating_sub(1);
+    }
+
+    pub(crate) fn input_right(&mut self) {
+        self.input_cursor = (self.input_cursor + 1).min(self.input_len());
+    }
+
+    pub(crate) fn input_home(&mut self) {
+        self.input_cursor = 0;
+    }
+
+    pub(crate) fn input_end(&mut self) {
+        self.input_cursor = self.input_len();
     }
 
     pub(crate) fn sync_search(&mut self) {
@@ -767,6 +852,8 @@ impl App {
             self.close_modal();
         } else if self.modal == Some(Modal::DirAdd) {
             self.open_modal(Modal::Directory);
+        } else if matches!(self.modal, Some(Modal::CookiesPath | Modal::YtdlpPath)) {
+            self.open_modal(Modal::Settings);
         } else {
             self.close_modal();
         }
@@ -815,6 +902,38 @@ impl App {
                 self.close_modal();
             }
             Modal::PlaylistName => self.submit_playlist_name(),
+            Modal::AddMusic => self.submit_add_music(),
+            Modal::RenameTrack => self.submit_rename_track(),
+            Modal::Download => self.start_download_search(),
+            Modal::CookiesPath => {
+                self.cfg.cookies = self.input.trim().to_string();
+                if let Err(err) = self.cfg.save() {
+                    self.notify(format!("保存配置失败：{err}"));
+                    return;
+                }
+                self.notify(if self.cfg.cookies.is_empty() {
+                    "cookies · 不发送".to_string()
+                } else {
+                    format!("cookies · {}", self.cfg.cookies)
+                });
+                self.open_modal(Modal::Settings);
+            }
+            Modal::YtdlpPath => {
+                self.cfg.ytdlp = self.input.trim().to_string();
+                if let Err(err) = self.cfg.save() {
+                    self.notify(format!("保存配置失败：{err}"));
+                    return;
+                }
+                self.notify(format!(
+                    "yt-dlp · {}",
+                    if self.cfg.ytdlp.is_empty() {
+                        "PATH 里的 yt-dlp"
+                    } else {
+                        self.cfg.ytdlp.as_str()
+                    }
+                ));
+                self.open_modal(Modal::Settings);
+            }
             _ => self.close_modal(),
         }
     }
@@ -852,7 +971,7 @@ impl App {
 
     pub(crate) fn begin_playlist_create(&mut self) {
         self.playlist_name_target = None;
-        self.input.clear();
+        self.input_clear();
         self.open_modal(Modal::PlaylistName);
     }
 
@@ -862,7 +981,7 @@ impl App {
             return;
         };
         self.playlist_name_target = Some(self.playlist_selected);
-        self.input = list.name.clone();
+        self.set_input(list.name.clone());
         self.open_modal(Modal::PlaylistName);
     }
 
@@ -1403,6 +1522,13 @@ impl App {
             (Some(a), None) => format!("A {}", library::duration_text(a)),
             _ => "关闭".into(),
         };
+        let download_dir = self
+            .roots()
+            .into_iter()
+            .next()
+            .unwrap_or_else(config::default_music_dir)
+            .display()
+            .to_string();
         vec![
             (
                 "音乐目录".into(),
@@ -1496,6 +1622,24 @@ impl App {
                 "缓存文件".into(),
                 crate::cache::cache_path().display().to_string(),
             ),
+            (
+                "yt-dlp 路径".into(),
+                if self.cfg.ytdlp.is_empty() {
+                    "PATH 里的 yt-dlp".into()
+                } else {
+                    self.cfg.ytdlp.clone()
+                },
+            ),
+            (
+                "cookies 文件".into(),
+                if self.cfg.cookies.is_empty() {
+                    "不发送".into()
+                } else {
+                    self.cfg.cookies.clone()
+                },
+            ),
+            ("搜索数量".into(), format!("{} 个", self.cfg.download_limit)),
+            ("下载目录".into(), download_dir),
         ]
     }
 
@@ -1582,16 +1726,33 @@ impl App {
                     self.clear_recent();
                 }
             }
-            20 | 21 => {}
+            22 => {
+                if delta != 0 {
+                    self.open_modal(Modal::YtdlpPath);
+                }
+            }
+            23 => {
+                if delta != 0 {
+                    self.open_modal(Modal::CookiesPath);
+                }
+            }
+            24 => {
+                self.cfg.download_limit =
+                    (self.cfg.download_limit as isize + delta).clamp(3, 30) as usize;
+                self.notify(format!("搜索数量 · {} 个", self.cfg.download_limit));
+            }
+            20 | 21 | 25 => {}
             _ => {}
         }
     }
 
     pub(crate) fn activate_setting(&mut self, index: usize) {
-        if index == 0 {
-            self.open_modal(Modal::Directory);
-        } else {
-            self.adjust_setting(index, 1);
+        match index {
+            0 => self.open_modal(Modal::Directory),
+            22 => self.open_modal(Modal::YtdlpPath),
+            23 => self.open_modal(Modal::CookiesPath),
+            25 => {}
+            _ => self.adjust_setting(index, 1),
         }
     }
 
@@ -1665,6 +1826,605 @@ impl App {
         self.queue_selected = 0;
         self.last_path = None;
         self.notify("队列已清空");
+    }
+
+    pub(crate) fn open_track_menu(&mut self) {
+        if self.selected_track().is_none() {
+            self.notify("没有选中曲目喵");
+            return;
+        }
+        self.track_menu_selected = 0;
+        self.open_modal(Modal::TrackMenu);
+    }
+
+    pub(crate) fn track_menu_move(&mut self, delta: isize) {
+        self.track_menu_selected = (self.track_menu_selected as isize + delta)
+            .clamp(0, TRACK_MENU.len() as isize - 1) as usize;
+    }
+
+    pub(crate) fn run_track_menu(&mut self, index: usize) {
+        match index {
+            0 => {
+                self.close_modal();
+                self.play_selected();
+            }
+            1 => {
+                self.close_modal();
+                self.toggle_favorite();
+            }
+            2 => {
+                self.close_modal();
+                self.open_modal(Modal::Playlists);
+                self.notify("选一个歌单，按 a 加入当前曲目喵");
+            }
+            3 => {
+                self.close_modal();
+                self.begin_rename_track();
+            }
+            4 => {
+                self.close_modal();
+                self.begin_delete_track();
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn begin_add_music(&mut self) {
+        self.open_modal(Modal::AddMusic);
+        self.input_clear();
+    }
+
+    pub(crate) fn submit_add_music(&mut self) {
+        let raw = self.input.trim().to_string();
+        if raw.is_empty() {
+            self.notify("路径不能为空喵");
+            return;
+        }
+        let source = config::expand_path(&raw);
+        if !source.exists() {
+            self.notify(format!("找不到：{}", source.display()));
+            return;
+        }
+        let root = self
+            .roots()
+            .into_iter()
+            .next()
+            .unwrap_or_else(config::default_music_dir);
+        if source.starts_with(&root) {
+            self.notify("已经在音乐目录里喵");
+            return;
+        }
+        let result = if source.is_dir() {
+            copy_audio_tree(&source, &root)
+        } else if library::is_audio(&source) {
+            copy_audio_file(&source, &root).map(|_| 1)
+        } else {
+            Err("不是音频文件喵".into())
+        };
+        match result {
+            Ok(count) => {
+                self.rescan();
+                self.notify(format!("已添加 {count} 首 · {}", root.display()));
+                self.close_modal();
+            }
+            Err(err) => self.notify(err),
+        }
+    }
+
+    pub(crate) fn begin_rename_track(&mut self) {
+        let Some(track) = self.selected_track().cloned() else {
+            self.notify("没有选中曲目喵");
+            return;
+        };
+        if self.mpv.state.path.as_ref() == Some(&track.path) {
+            self.notify("正在播放这首，先切歌再改名喵");
+            return;
+        }
+        let stem = track
+            .path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_string())
+            .unwrap_or(track.title);
+        self.open_modal(Modal::RenameTrack);
+        self.set_input(stem);
+    }
+
+    pub(crate) fn submit_rename_track(&mut self) {
+        let raw = self.input.trim().to_string();
+        if raw.is_empty() {
+            self.notify("名字不能为空喵");
+            return;
+        }
+        let Some(track) = self.selected_track().cloned() else {
+            self.notify("没有选中曲目喵");
+            return;
+        };
+        let old = track.path;
+        let ext = old.extension().map(|ext| ext.to_string_lossy().to_string());
+        let mut stem = raw;
+        if let Some(ext) = &ext {
+            let suffix = format!(".{ext}");
+            if stem.len() > suffix.len() && stem.to_lowercase().ends_with(&suffix.to_lowercase()) {
+                stem.truncate(stem.len() - suffix.len());
+            }
+        }
+        if stem.is_empty() || stem.contains(['/', '\\']) {
+            self.notify("名字里不能有斜杠喵");
+            return;
+        }
+        let file_name = match &ext {
+            Some(ext) => format!("{stem}.{ext}"),
+            None => stem.clone(),
+        };
+        let target = old.with_file_name(file_name);
+        if target == old {
+            self.close_modal();
+            self.notify("名字没有变喵");
+            return;
+        }
+        if target.exists() {
+            self.notify("同名文件已经存在喵");
+            return;
+        }
+        if let Err(err) = fs::rename(&old, &target) {
+            self.notify(format!("重命名失败：{err}"));
+            return;
+        }
+        let tag_error = library::write_title(&target, &stem).err();
+        self.remap_path(&old, &target);
+        self.rescan();
+        self.close_modal();
+        if let Some(err) = tag_error {
+            self.notify(format!("已改文件名 · 标签写入失败：{err}"));
+        } else {
+            self.notify(format!("已重命名 · {stem}"));
+        }
+    }
+
+    pub(crate) fn begin_delete_track(&mut self) {
+        let Some(track) = self.selected_track().cloned() else {
+            self.notify("没有选中曲目喵");
+            return;
+        };
+        if self.mpv.state.path.as_ref() == Some(&track.path) {
+            self.notify("正在播放这首，先切歌再删喵");
+            return;
+        }
+        self.pending_delete = Some(track.path);
+        self.open_modal(Modal::DeleteTrack);
+    }
+
+    pub(crate) fn confirm_delete_track(&mut self) {
+        let Some(path) = self.pending_delete.take() else {
+            self.close_modal();
+            return;
+        };
+        if let Err(err) = fs::remove_file(&path) {
+            self.pending_delete = Some(path);
+            self.notify(format!("删除失败：{err}"));
+            return;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        if let Some(index) = self.session.iter().position(|track| track.path == path) {
+            let _ = self.mpv.playlist_remove(index as i64);
+            self.mpv.refresh();
+            self.sync_session_from_mpv();
+        }
+        self.forget_path(&path);
+        self.rescan();
+        self.close_modal();
+        self.notify(format!("已删除 · {name}"));
+    }
+
+    fn remap_path(&mut self, old: &Path, new: &Path) {
+        let old_key = old.to_string_lossy().to_string();
+        let new_key = new.to_string_lossy().to_string();
+        for item in &mut self.cfg.favorites {
+            if *item == old_key {
+                *item = new_key.clone();
+            }
+        }
+        for list in &mut self.playlists {
+            for song in &mut list.songs {
+                if *song == old_key {
+                    *song = new_key.clone();
+                }
+            }
+        }
+        for item in &mut self.cache.recent {
+            if *item == old_key {
+                *item = new_key.clone();
+            }
+        }
+        if self.cache.last_path.as_deref() == Some(old_key.as_str()) {
+            self.cache.last_path = Some(new_key.clone());
+        }
+        if let Some(value) = self.cache.plays.remove(&old_key) {
+            self.cache.plays.insert(new_key.clone(), value);
+        }
+        if let Some(value) = self.cache.ratings.remove(&old_key) {
+            self.cache.ratings.insert(new_key.clone(), value);
+        }
+        if let Some(value) = self.cache.listen_seconds.remove(&old_key) {
+            self.cache.listen_seconds.insert(new_key.clone(), value);
+        }
+        for track in self.session.iter_mut().chain(self.order_session.iter_mut()) {
+            if track.path == old {
+                track.path = new.to_path_buf();
+            }
+        }
+        if self.last_path.as_deref() == Some(old) {
+            self.last_path = Some(new.to_path_buf());
+        }
+        self.cfg.playlists = self.playlists.clone();
+        let _ = self.cfg.save();
+        let _ = self.cache.save();
+    }
+
+    fn forget_path(&mut self, path: &Path) {
+        let key = path.to_string_lossy().to_string();
+        self.cfg.favorites.retain(|item| item != &key);
+        for list in &mut self.playlists {
+            list.songs.retain(|song| song != &key);
+        }
+        self.cache.recent.retain(|item| item != &key);
+        self.cache.plays.remove(&key);
+        self.cache.ratings.remove(&key);
+        self.cache.listen_seconds.remove(&key);
+        if self.cache.last_path.as_deref() == Some(key.as_str()) {
+            self.cache.last_path = None;
+        }
+        self.session.retain(|track| track.path != path);
+        self.order_session.retain(|track| track.path != path);
+        if self.last_path.as_deref() == Some(path) {
+            self.last_path = None;
+        }
+        self.cfg.playlists = self.playlists.clone();
+        let _ = self.cfg.save();
+        let _ = self.cache.save();
+    }
+
+    pub(crate) fn open_download(&mut self) {
+        if self.dl_formatting || (!self.dl_formats.is_empty() && !self.dl_pending.is_empty()) {
+            self.open_modal(Modal::DownloadFormats);
+            return;
+        }
+        if self.dl_busy || self.dl_searching || !self.dl_candidates.is_empty() {
+            self.open_modal(Modal::DownloadList);
+            return;
+        }
+        self.open_modal(Modal::Download);
+        self.input_clear();
+    }
+
+    pub(crate) fn start_download_search(&mut self) {
+        if self.dl_busy || self.dl_searching || self.dl_formatting {
+            self.notify("还有任务在跑喵，等它结束");
+            return;
+        }
+        let raw = self.input.trim().to_string();
+        if raw.is_empty() {
+            self.notify("输入关键词、BV 号或链接喵");
+            return;
+        }
+        if crate::download::has_multiple_ids(&raw) {
+            self.notify("一次只能输入一个 id 喵");
+            return;
+        }
+        if let Some(items) = crate::download::direct_candidates(&raw) {
+            self.dl_candidates.clear();
+            self.dl_checked.clear();
+            self.dl_selected = 0;
+            self.dl_searching = false;
+            self.dl_from_search = false;
+            self.begin_format_choice(items);
+            return;
+        }
+        self.dl_candidates.clear();
+        self.dl_checked.clear();
+        self.dl_selected = 0;
+        self.dl_from_search = true;
+        self.dl_searching = true;
+        self.dl_status = "正在搜索 B 站…".into();
+        let ytdlp = self.cfg.ytdlp.clone();
+        let cookies = crate::download::cookie_file(&self.cfg.cookies);
+        let limit = self.cfg.download_limit;
+        self.dl_rx = Some(crate::download::spawn_search(ytdlp, cookies, limit, raw));
+        self.open_modal(Modal::DownloadList);
+    }
+
+    pub(crate) fn start_download(
+        &mut self,
+        items: Vec<crate::download::Candidate>,
+        format: Option<String>,
+    ) {
+        if items.is_empty() {
+            self.notify("没有选中要下载的曲目喵");
+            return;
+        }
+        if self.dl_busy || self.dl_searching || self.dl_formatting {
+            self.notify("还有任务在跑喵，等它结束");
+            return;
+        }
+        let dir = self
+            .roots()
+            .into_iter()
+            .next()
+            .unwrap_or_else(config::default_music_dir);
+        if !dir.is_dir() {
+            self.notify(format!("下载目录不存在：{}", dir.display()));
+            return;
+        }
+        let ytdlp = self.cfg.ytdlp.clone();
+        let cookies = crate::download::cookie_file(&self.cfg.cookies);
+        self.dl_formats.clear();
+        self.dl_pending.clear();
+        self.dl_busy = true;
+        self.dl_progress = 0.0;
+        self.dl_status = match &format {
+            Some(format) => format!("准备下载 {} 首 · 格式 {format}…", items.len()),
+            None => format!("准备下载 {} 首 · 自动格式…", items.len()),
+        };
+        self.dl_rx = Some(crate::download::spawn_download(
+            ytdlp, cookies, dir, items, format,
+        ));
+        self.notify("开始下载 · 关掉弹窗也会继续喵");
+    }
+
+    pub(crate) fn download_selected(&mut self) {
+        if self.dl_busy || self.dl_searching || self.dl_formatting {
+            self.notify("等当前任务结束喵");
+            return;
+        }
+        let picked: Vec<_> = self
+            .dl_candidates
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| self.dl_checked.get(*index).copied().unwrap_or(false))
+            .map(|(_, candidate)| candidate.clone())
+            .collect();
+        let items = if picked.is_empty() {
+            self.dl_candidates
+                .get(self.dl_selected)
+                .cloned()
+                .into_iter()
+                .collect()
+        } else {
+            picked
+        };
+        if items.is_empty() {
+            self.notify("先搜索，再选一首喵");
+            return;
+        }
+        self.begin_format_choice(items);
+    }
+
+    fn begin_format_choice(&mut self, items: Vec<crate::download::Candidate>) {
+        if items.is_empty() {
+            self.notify("没有选中要下载的曲目喵");
+            return;
+        }
+        self.dl_pending = items;
+        self.dl_formats.clear();
+        self.dl_format_selected = 0;
+        self.dl_formatting = true;
+        self.dl_status = "读取格式列表…".into();
+        let ytdlp = self.cfg.ytdlp.clone();
+        let cookies = crate::download::cookie_file(&self.cfg.cookies);
+        let url = self.dl_pending[0].url.clone();
+        self.dl_rx = Some(crate::download::spawn_formats(ytdlp, cookies, url));
+        self.open_modal(Modal::DownloadFormats);
+    }
+
+    pub(crate) fn back_from_formats(&mut self) {
+        if self.dl_from_search && !self.dl_candidates.is_empty() {
+            self.open_modal(Modal::DownloadList);
+        } else {
+            self.dl_formats.clear();
+            self.dl_pending.clear();
+            self.dl_formatting = false;
+            self.dl_rx = None;
+            self.open_modal(Modal::Download);
+        }
+    }
+
+    pub(crate) fn format_move(&mut self, delta: isize) {
+        if self.dl_formats.is_empty() {
+            return;
+        }
+        self.dl_format_selected = (self.dl_format_selected as isize + delta)
+            .clamp(0, self.dl_formats.len().saturating_sub(1) as isize)
+            as usize;
+    }
+
+    pub(crate) fn confirm_format_download(&mut self) {
+        if self.dl_pending.is_empty() {
+            self.notify("先选要下载的曲目喵");
+            return;
+        }
+        if self.dl_busy || self.dl_searching || self.dl_formatting {
+            self.notify("等格式列表读完喵");
+            return;
+        }
+        let format = self
+            .dl_formats
+            .get(self.dl_format_selected)
+            .filter(|format| !format.id.is_empty())
+            .map(|format| format.id.clone());
+        let items = std::mem::take(&mut self.dl_pending);
+        self.start_download(items, format);
+        self.open_modal(Modal::DownloadList);
+    }
+
+    pub(crate) fn toggle_download_check(&mut self) {
+        if let Some(flag) = self.dl_checked.get_mut(self.dl_selected) {
+            *flag = !*flag;
+        }
+    }
+
+    pub(crate) fn toggle_all_download_checks(&mut self) {
+        if self.dl_candidates.is_empty() {
+            return;
+        }
+        let all = self.dl_checked.iter().all(|flag| *flag);
+        self.dl_checked = vec![!all; self.dl_candidates.len()];
+    }
+
+    pub(crate) fn download_move(&mut self, delta: isize) {
+        if self.dl_candidates.is_empty() {
+            return;
+        }
+        self.dl_selected = (self.dl_selected as isize + delta)
+            .clamp(0, self.dl_candidates.len().saturating_sub(1) as isize)
+            as usize;
+    }
+
+    pub(crate) fn poll_download(&mut self) {
+        let Some(rx) = self.dl_rx.take() else {
+            return;
+        };
+        let mut keep = true;
+        loop {
+            match rx.try_recv() {
+                Ok(crate::download::Event::SearchDone(result)) => {
+                    self.dl_searching = false;
+                    match result {
+                        Ok(list) => {
+                            self.dl_from_search = true;
+                            self.dl_checked = vec![false; list.len()];
+                            self.dl_selected = 0;
+                            self.dl_status =
+                                format!("找到 {} 个结果 · 空格勾选 · Enter 选格式", list.len());
+                            self.dl_candidates = list;
+                        }
+                        Err(err) => {
+                            self.dl_status = err.clone();
+                            self.notify(err);
+                        }
+                    }
+                }
+                Ok(crate::download::Event::FormatsDone(result)) => {
+                    self.dl_formatting = false;
+                    let count = self.dl_pending.len();
+                    let mut formats = vec![crate::download::Format::auto()];
+                    match result {
+                        Ok(list) => {
+                            formats.extend(list);
+                            self.dl_status = format!("选择格式 · 将下载 {count} 首 · Enter 确认");
+                        }
+                        Err(err) => {
+                            self.dl_status = format!("{err} · 可先用自动格式");
+                            self.notify(err);
+                        }
+                    }
+                    self.dl_formats = formats;
+                    self.dl_format_selected = self
+                        .dl_format_selected
+                        .min(self.dl_formats.len().saturating_sub(1));
+                }
+                Ok(crate::download::Event::Started {
+                    index,
+                    total,
+                    title,
+                }) => {
+                    self.dl_progress = 0.0;
+                    self.dl_status = format!("下载 {}/{} · {title}", index + 1, total);
+                }
+                Ok(crate::download::Event::Progress(percent)) => {
+                    self.dl_progress = percent;
+                }
+                Ok(crate::download::Event::ItemDone { title, ok, message }) => {
+                    self.dl_progress = 100.0;
+                    self.notify(if ok {
+                        format!("下载完成 · {title}")
+                    } else {
+                        format!("下载失败 · {title} · {message}")
+                    });
+                }
+                Ok(crate::download::Event::AllDone { ok, failed }) => {
+                    self.dl_busy = false;
+                    self.dl_progress = 0.0;
+                    self.dl_status = if failed == 0 {
+                        format!("全部完成 · {ok} 首")
+                    } else {
+                        format!("完成 {ok} 首 · 失败 {failed} 首")
+                    };
+                    self.rescan();
+                    self.notify(self.dl_status.clone());
+                    keep = false;
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.dl_searching = false;
+                    self.dl_busy = false;
+                    self.dl_formatting = false;
+                    keep = false;
+                    break;
+                }
+            }
+        }
+        if keep {
+            self.dl_rx = Some(rx);
+        }
+    }
+}
+
+fn copy_audio_file(source: &Path, dir: &Path) -> Result<PathBuf, String> {
+    let name = source
+        .file_name()
+        .ok_or_else(|| "文件名读不出来喵".to_string())?;
+    let mut target = dir.join(name);
+    if target.exists() {
+        let stem = source
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_string())
+            .unwrap_or_else(|| "track".into());
+        let ext = source
+            .extension()
+            .map(|ext| format!(".{}", ext.to_string_lossy()))
+            .unwrap_or_default();
+        for index in 2..1000 {
+            target = dir.join(format!("{stem} ({index}){ext}"));
+            if !target.exists() {
+                break;
+            }
+        }
+    }
+    if target.exists() {
+        return Err("同名文件太多喵，换个名字再添加".into());
+    }
+    fs::copy(source, &target).map_err(|err| format!("复制 {} 失败：{err}", source.display()))?;
+    Ok(target)
+}
+
+fn copy_audio_tree(source: &Path, dir: &Path) -> Result<usize, String> {
+    let mut count = 0;
+    let mut stack = vec![source.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if library::is_audio(&path) {
+                copy_audio_file(&path, dir)?;
+                count += 1;
+            }
+        }
+    }
+    if count == 0 {
+        Err("目录里没有音频文件喵".into())
+    } else {
+        Ok(count)
     }
 }
 

@@ -36,6 +36,7 @@ pub const MUTE: &str = "\u{f026}";
 pub const LIST: &str = "\u{f03a}";
 pub const CLOCK: &str = "\u{f017}";
 pub const PAW: &str = "\u{f1b0}";
+pub const EXPAND: &str = "\u{f065}";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Style {
@@ -333,6 +334,8 @@ pub enum ModalButton {
     MoveDown,
     Remove,
     Open,
+    Download,
+    Back,
 }
 
 impl ModalButton {
@@ -355,6 +358,8 @@ impl ModalButton {
             Self::MoveDown => "下移 J",
             Self::Remove => "移出 d",
             Self::Open => "打开 Enter",
+            Self::Download => "下载 Enter",
+            Self::Back => "返回 s",
         }
     }
 }
@@ -408,6 +413,11 @@ pub enum Hit {
     EqualizerRight(usize),
     ModalButton(ModalButton),
     ModalPanel,
+    Fullscreen,
+    DownloadRow(usize),
+    DownloadCheck(usize),
+    FormatRow(usize),
+    TrackMenuRow(usize),
 }
 
 impl Hit {
@@ -465,6 +475,11 @@ impl Hit {
             Hit::EqualizerRight(_) => "提高 1 dB",
             Hit::ModalButton(button) => button.label(),
             Hit::ModalPanel => "窗口",
+            Hit::Fullscreen => "全屏播放 · Ctrl+F",
+            Hit::DownloadRow(_) => "单击选中 · 双击下载",
+            Hit::DownloadCheck(_) => "勾选这首",
+            Hit::FormatRow(_) => "单击选中 · 双击下载",
+            Hit::TrackMenuRow(_) => "单击执行",
         }
     }
 }
@@ -621,6 +636,26 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
             }
             ui.hover = hit;
         }
+        MouseEventKind::Down(MouseButton::Right) => {
+            ui.force_full = true;
+            ui.last_click = None;
+            if app.modal.is_some() || app.lyrics_full {
+                return;
+            }
+            match ui.hit_at(mouse.column, mouse.row) {
+                Some(Hit::Row(index)) => {
+                    app.selected = index;
+                    app.open_track_menu();
+                    ui.hover = None;
+                }
+                Some(Hit::HomeRecent(index)) => {
+                    app.home_selected = index;
+                    app.open_track_menu();
+                    ui.hover = None;
+                }
+                _ => {}
+            }
+        }
         MouseEventKind::Down(MouseButton::Left) => {
             ui.force_full = true;
             let hit = ui.hit_at(mouse.column, mouse.row);
@@ -635,6 +670,8 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                         | Hit::SettingRow(_)
                         | Hit::ModalRow(_)
                         | Hit::EqualizerRow(_)
+                        | Hit::DownloadRow(_)
+                        | Hit::FormatRow(_)
                 )
             );
             ui.hover = hit;
@@ -689,6 +726,7 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                 Hit::NextPreview => app.skip(true),
                 Hit::TrackInfo => app.open_modal(Modal::Info),
                 Hit::LyricsFull => app.toggle_full_lyrics(),
+                Hit::Fullscreen => app.toggle_full_lyrics(),
                 Hit::LyricsFullBack => {
                     app.lyrics_full = false;
                     app.notify("退出全屏歌词");
@@ -788,6 +826,9 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                             (app.keybind_selected + 1).min(crate::keymap::ACTIONS.len() - 1);
                     }
                     crate::app::Modal::Browse => app.browse_move(1),
+                    crate::app::Modal::DownloadList => app.download_move(1),
+                    crate::app::Modal::DownloadFormats => app.format_move(1),
+                    crate::app::Modal::TrackMenu => app.track_menu_move(1),
                     _ => app.modal_scroll += 3,
                 }
             } else {
@@ -828,6 +869,9 @@ pub fn handle_mouse(app: &mut crate::app::App, ui: &mut UiState, mouse: MouseEve
                         app.keybind_selected = app.keybind_selected.saturating_sub(1);
                     }
                     crate::app::Modal::Browse => app.browse_move(-1),
+                    crate::app::Modal::DownloadList => app.download_move(-1),
+                    crate::app::Modal::DownloadFormats => app.format_move(-1),
+                    crate::app::Modal::TrackMenu => app.track_menu_move(-1),
                     _ => app.modal_scroll = app.modal_scroll.saturating_sub(3),
                 }
             } else {
@@ -887,6 +931,23 @@ fn handle_modal_click(app: &mut crate::app::App, ui: &mut UiState, hit: Hit) {
             app.eq_selected = index.min(crate::app::EQ_BANDS.len());
             app.adjust_eq(index, 1.0);
         }
+        Hit::DownloadRow(index) => {
+            app.dl_selected = index.min(app.dl_candidates.len().saturating_sub(1));
+            if ui.double_click(hit) {
+                app.download_selected();
+            }
+        }
+        Hit::DownloadCheck(index) => {
+            app.dl_selected = index.min(app.dl_candidates.len().saturating_sub(1));
+            app.toggle_download_check();
+        }
+        Hit::FormatRow(index) => {
+            app.dl_format_selected = index.min(app.dl_formats.len().saturating_sub(1));
+            if ui.double_click(hit) {
+                app.confirm_format_download();
+            }
+        }
+        Hit::TrackMenuRow(index) => app.run_track_menu(index),
         Hit::ModalButton(button) => handle_modal_button(app, button),
         _ => app.close_modal(),
     }
@@ -946,7 +1007,13 @@ fn handle_modal_button(app: &mut crate::app::App, button: ModalButton) {
     };
     match button {
         ModalButton::Close => app.close_modal(),
-        ModalButton::Confirm => app.submit_modal(),
+        ModalButton::Confirm => {
+            if modal == Modal::DeleteTrack {
+                app.confirm_delete_track();
+            } else {
+                app.submit_modal();
+            }
+        }
         ModalButton::Cancel => app.cancel_modal(),
         ModalButton::New => app.begin_playlist_create(),
         ModalButton::Rename => app.begin_playlist_rename(),
@@ -998,6 +1065,20 @@ fn handle_modal_button(app: &mut crate::app::App, button: ModalButton) {
             _ => {}
         },
         ModalButton::Open => activate_modal_row(app),
+        ModalButton::Download => {
+            if modal == Modal::DownloadFormats {
+                app.confirm_format_download();
+            } else {
+                app.download_selected();
+            }
+        }
+        ModalButton::Back => {
+            if modal == Modal::DownloadFormats {
+                app.back_from_formats();
+            } else {
+                app.open_modal(Modal::Download);
+            }
+        }
     }
 }
 

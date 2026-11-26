@@ -3,6 +3,7 @@ mod cache;
 mod cli;
 mod clock;
 mod config;
+mod download;
 mod keymap;
 mod library;
 mod lyrics;

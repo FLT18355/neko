@@ -50,6 +50,12 @@ pub struct Config {
     pub autoplay: bool,
     pub radio: bool,
     pub keys: HashMap<String, String>,
+    /// B 站下载工具，留空时用 PATH 里的 yt-dlp。
+    pub ytdlp: String,
+    /// 浏览器导出的 cookies 文件，空字符串表示不发送。
+    pub cookies: String,
+    /// 关键词搜索返回的候选数量。
+    pub download_limit: usize,
 }
 
 impl Default for Config {
@@ -74,6 +80,9 @@ impl Default for Config {
             autoplay: true,
             radio: false,
             keys: HashMap::new(),
+            ytdlp: "yt-dlp".into(),
+            cookies: "~/cookies.txt".into(),
+            download_limit: 10,
         }
     }
 }

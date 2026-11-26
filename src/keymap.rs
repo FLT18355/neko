@@ -60,9 +60,13 @@ pub enum Action {
     Theme,
     Keybindings,
     ClearFilter,
+    AddMusic,
+    RenameTrack,
+    DeleteTrack,
+    Download,
 }
 
-pub const ACTIONS: [Action; 58] = [
+pub const ACTIONS: [Action; 62] = [
     Action::Quit,
     Action::PlayPause,
     Action::PlaySelected,
@@ -121,6 +125,10 @@ pub const ACTIONS: [Action; 58] = [
     Action::Theme,
     Action::Keybindings,
     Action::ClearFilter,
+    Action::AddMusic,
+    Action::RenameTrack,
+    Action::DeleteTrack,
+    Action::Download,
 ];
 
 pub const DEFAULT_BINDINGS: &[(Action, &str)] = &[
@@ -187,6 +195,10 @@ pub const DEFAULT_BINDINGS: &[(Action, &str)] = &[
     (Action::Theme, "ctrl+t"),
     (Action::Keybindings, "ctrl+k"),
     (Action::ClearFilter, "esc"),
+    (Action::AddMusic, "ctrl+n"),
+    (Action::RenameTrack, "f2"),
+    (Action::DeleteTrack, "delete"),
+    (Action::Download, "d"),
 ];
 
 impl Action {
@@ -250,6 +262,10 @@ impl Action {
             Action::Theme => "theme",
             Action::Keybindings => "keybindings",
             Action::ClearFilter => "clear_filter",
+            Action::AddMusic => "add_music",
+            Action::RenameTrack => "rename_track",
+            Action::DeleteTrack => "delete_track",
+            Action::Download => "download",
         }
     }
 
@@ -313,6 +329,10 @@ impl Action {
             Action::Theme => "切换主题",
             Action::Keybindings => "自定义快捷键",
             Action::ClearFilter => "清除搜索筛选",
+            Action::AddMusic => "添加音乐文件",
+            Action::RenameTrack => "重命名选中曲目",
+            Action::DeleteTrack => "删除选中曲目",
+            Action::Download => "从 B 站下载音乐",
         }
     }
 }

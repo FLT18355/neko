@@ -70,22 +70,93 @@ fn handle_modal(app: &mut App, key: KeyEvent) {
         }
         return;
     }
+    if modal == Modal::TrackMenu {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
+            KeyCode::Up | KeyCode::Char('k') => app.track_menu_move(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.track_menu_move(1),
+            KeyCode::Enter => app.run_track_menu(app.track_menu_selected),
+            _ => {}
+        }
+        return;
+    }
+    if modal == Modal::DownloadList {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.close_modal(),
+            KeyCode::Up | KeyCode::Char('k') => app.download_move(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.download_move(1),
+            KeyCode::Home => app.dl_selected = 0,
+            KeyCode::End => {
+                app.dl_selected = app.dl_candidates.len().saturating_sub(1);
+            }
+            KeyCode::Char(' ') => app.toggle_download_check(),
+            KeyCode::Char('a') => app.toggle_all_download_checks(),
+            KeyCode::Enter => app.download_selected(),
+            KeyCode::Char('s') | KeyCode::Char('/') => app.open_modal(Modal::Download),
+            _ => {}
+        }
+        return;
+    }
+    if modal == Modal::DownloadFormats {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('s') => app.back_from_formats(),
+            KeyCode::Char('q') => app.close_modal(),
+            KeyCode::Up | KeyCode::Char('k') => app.format_move(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.format_move(1),
+            KeyCode::Home => app.dl_format_selected = 0,
+            KeyCode::End => {
+                app.dl_format_selected = app.dl_formats.len().saturating_sub(1);
+            }
+            KeyCode::Enter => app.confirm_format_download(),
+            _ => {}
+        }
+        return;
+    }
+    if modal == Modal::DeleteTrack {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') => app.confirm_delete_track(),
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => {
+                app.pending_delete = None;
+                app.close_modal();
+            }
+            _ => {}
+        }
+        return;
+    }
     let editing = matches!(
         modal,
-        Modal::Search | Modal::DirAdd | Modal::Seek | Modal::PlaylistName
+        Modal::Search
+            | Modal::DirAdd
+            | Modal::Seek
+            | Modal::PlaylistName
+            | Modal::AddMusic
+            | Modal::RenameTrack
+            | Modal::Download
+            | Modal::CookiesPath
+            | Modal::YtdlpPath
     );
     if editing {
         match key.code {
             KeyCode::Esc => app.cancel_modal(),
             KeyCode::Enter => app.submit_modal(),
+            KeyCode::Left => app.input_left(),
+            KeyCode::Right => app.input_right(),
+            KeyCode::Home => app.input_home(),
+            KeyCode::End => app.input_end(),
             KeyCode::Backspace => {
-                app.input.pop();
+                app.input_backspace();
+                if modal == Modal::Search {
+                    app.sync_search();
+                }
+            }
+            KeyCode::Delete => {
+                app.input_delete();
                 if modal == Modal::Search {
                     app.sync_search();
                 }
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app.input.clear();
+                app.input_clear();
                 if modal == Modal::Search {
                     app.sync_search();
                 }
@@ -94,7 +165,7 @@ fn handle_modal(app: &mut App, key: KeyEvent) {
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT) =>
             {
-                app.input.push(ch);
+                app.input_insert(ch);
                 if modal == Modal::Search {
                     app.sync_search();
                 }

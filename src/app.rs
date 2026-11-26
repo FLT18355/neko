@@ -20,6 +20,14 @@ pub(crate) const TOAST_FADE: Duration = Duration::from_millis(280);
 pub(crate) const EQ_BANDS: [f64; 10] = [
     31.0, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
 ];
+/// 右键曲目行弹出的操作菜单，顺序和 run_track_menu 一致。
+pub(crate) const TRACK_MENU: [(&str, &str); 5] = [
+    ("播放这首", "Enter"),
+    ("收藏 / 取消收藏", "f"),
+    ("加入歌单", "a"),
+    ("重命名", "F2"),
+    ("删除文件", "Delete"),
+];
 pub(crate) const EFFECTS: [(&str, &str); 4] = [
     ("原声", ""),
     (
@@ -52,6 +60,15 @@ pub(crate) enum Modal {
     Stats,
     Keybindings,
     Browse,
+    TrackMenu,
+    AddMusic,
+    RenameTrack,
+    DeleteTrack,
+    Download,
+    DownloadList,
+    DownloadFormats,
+    CookiesPath,
+    YtdlpPath,
 }
 
 pub struct App {
@@ -93,6 +110,7 @@ pub struct App {
     modal_anim_at: Instant,
     pub(crate) setting_pulse: Option<(usize, Instant)>,
     pub(crate) input: String,
+    pub(crate) input_cursor: usize,
     pub(crate) modal_scroll: usize,
     pub(crate) setting_selected: usize,
     pub(crate) quit: bool,
@@ -124,6 +142,21 @@ pub struct App {
     pub(crate) bindings: HashMap<String, Action>,
     pub(crate) viz: [f32; crate::viz::BANDS],
     pub(crate) refreshed_at: Instant,
+    pub(crate) dl_rx: Option<std::sync::mpsc::Receiver<crate::download::Event>>,
+    pub(crate) dl_candidates: Vec<crate::download::Candidate>,
+    pub(crate) dl_selected: usize,
+    pub(crate) dl_checked: Vec<bool>,
+    pub(crate) dl_searching: bool,
+    pub(crate) dl_busy: bool,
+    pub(crate) dl_status: String,
+    pub(crate) dl_progress: f32,
+    pub(crate) dl_formats: Vec<crate::download::Format>,
+    pub(crate) dl_format_selected: usize,
+    pub(crate) dl_pending: Vec<crate::download::Candidate>,
+    pub(crate) dl_formatting: bool,
+    pub(crate) dl_from_search: bool,
+    pub(crate) track_menu_selected: usize,
+    pub(crate) pending_delete: Option<PathBuf>,
 }
 
 fn fade_volume(base: f64, remaining: f64) -> f64 {
@@ -275,6 +308,21 @@ impl App {
             lyrics_full: false,
             viz: [0.0; crate::viz::BANDS],
             refreshed_at: Instant::now(),
+            dl_rx: None,
+            dl_candidates: Vec::new(),
+            dl_selected: 0,
+            dl_checked: Vec::new(),
+            dl_searching: false,
+            dl_busy: false,
+            dl_status: String::new(),
+            dl_progress: 0.0,
+            dl_formats: Vec::new(),
+            dl_format_selected: 0,
+            dl_pending: Vec::new(),
+            dl_formatting: false,
+            dl_from_search: false,
+            track_menu_selected: 0,
+            pending_delete: None,
             a_point: None,
             b_point: None,
             sleep_at: None,
@@ -293,6 +341,7 @@ impl App {
             modal_anim_at: Instant::now(),
             setting_pulse: None,
             input: String::new(),
+            input_cursor: 0,
             modal_scroll: 0,
             setting_selected: 0,
             quit: false,
@@ -473,6 +522,7 @@ impl App {
     }
 
     pub fn tick(&mut self) {
+        self.poll_download();
         let now = Instant::now();
         let delta = now.duration_since(self.stat_at).as_secs_f64().min(1.0);
         self.stat_at = now;
@@ -594,6 +644,7 @@ impl App {
                 .toast
                 .as_ref()
                 .is_some_and(|(_, at)| at.elapsed() < TOAST_FADE)
+            || ((self.dl_busy || self.dl_searching) && self.modal == Some(Modal::DownloadList))
     }
 
     /// 打开中的弹窗优先，关闭动画期间继续画即将消失的那个。

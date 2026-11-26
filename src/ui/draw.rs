@@ -1149,6 +1149,7 @@ fn draw_footer(
         (SEARCH, Hit::Search, "搜索"),
         (LIST, Hit::Queue, "队列"),
         (GEAR, Hit::Settings, "设置"),
+        (EXPAND, Hit::Fullscreen, "全屏"),
         ("?", Hit::Help, "帮助"),
         (POWER, Hit::Quit, "退出"),
     ];
@@ -1184,7 +1185,7 @@ fn control(
     hover: Option<Hit>,
     hits: &mut Vec<(Hit, Rect)>,
 ) -> usize {
-    let text = if label.is_empty() || canvas.width() < 100 {
+    let text = if label.is_empty() || canvas.width() < 120 {
         icon.to_string()
     } else {
         format!("{icon} {label}")

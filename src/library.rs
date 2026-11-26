@@ -1,6 +1,7 @@
-use lofty::config::ParseOptions;
+use lofty::config::{ParseOptions, WriteOptions};
 use lofty::prelude::*;
 use lofty::probe::Probe;
+use lofty::tag::{ItemKey, Tag};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -210,6 +211,22 @@ fn read_meta(path: &Path) -> Meta {
         meta.genre = "未分类".into();
     }
     meta
+}
+
+/// 把标题写进音频标签；格式不支持时返回错误，调用方仍可只改文件名。
+pub fn write_title(path: &Path, title: &str) -> Result<(), String> {
+    let mut tagged = Probe::open(path)
+        .and_then(|probe| probe.read())
+        .map_err(|err| format!("{err}"))?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(tagged.file_type().primary_tag_type()));
+    }
+    if let Some(tag) = tagged.primary_tag_mut() {
+        tag.insert_text(ItemKey::TrackTitle, title.to_string());
+    }
+    tagged
+        .save_to_path(path, WriteOptions::default())
+        .map_err(|err| format!("{err}"))
 }
 
 pub fn sort_tracks(tracks: &mut [Track], mode: &str) {
